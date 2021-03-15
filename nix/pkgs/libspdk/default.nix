@@ -41,7 +41,7 @@ let
       repo = "spdk";
       rev = "f180b1d0a5fbac77c3e7caf2047ea51683ec7795";
       sha256 = "14k816074hh0r1gkqkfyipfcqvl49d2qz7qqwcpsk399f0s3dds0";
-      #sha256 = stdenv.lib.fakeSha256;
+      #sha256 = lib.fakeSha256;
       fetchSubmodules = true;
     };
 
@@ -59,7 +59,7 @@ let
       binutils
       libtool
       libaio
-      libiscsi.dev
+      libiscsi
       liburing
       libuuid
       nasm

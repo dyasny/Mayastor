@@ -23,7 +23,7 @@
 let
   versionDrv = import ../../lib/version.nix { inherit lib stdenv git; };
   version = builtins.readFile "${versionDrv}";
-  env = stdenv.lib.makeBinPath [ busybox xfsprogs e2fsprogs utillinux ];
+  env = lib.makeBinPath [ busybox xfsprogs e2fsprogs utillinux ];
 
   # common props for all mayastor images
   mayastorImageProps = {

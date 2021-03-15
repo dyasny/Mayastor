@@ -304,7 +304,7 @@ checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 [[package]]
 name = "blkid"
 version = "0.2.1"
-source = "git+https://github.com/openebs/blkid?branch=blkid-sys#3dc458b001fffeaa4525296b838d1aafd51a7c33"
+source = "git+https://github.com/hoverbear/blkid?branch=blkid-sys-cherrypicked#4806f6689ee8eff33278a246eaa33e178bd77483"
 dependencies = [
  "blkid-sys",
  "err-derive",
@@ -314,7 +314,7 @@ dependencies = [
 [[package]]
 name = "blkid-sys"
 version = "0.1.4"
-source = "git+https://github.com/openebs/blkid?branch=blkid-sys#3dc458b001fffeaa4525296b838d1aafd51a7c33"
+source = "git+https://github.com/hoverbear/blkid?branch=blkid-sys-cherrypicked#4806f6689ee8eff33278a246eaa33e178bd77483"
 dependencies = [
  "bindgen",
 ]

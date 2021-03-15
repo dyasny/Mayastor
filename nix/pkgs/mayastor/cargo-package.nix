@@ -10,27 +10,22 @@
 , libudev
 , liburing
 , llvmPackages
-, makeRustPlatform
+, rustPlatform
 , numactl
 , openssl
 , pkg-config
 , protobuf
-, sources
 , xfsprogs
-, utillinux
+, util-linux
 , llvmPackages_11
 , targetPackages
 , buildPackages
 , targetPlatform
 , version
+, rustfmt
 , cargoBuildFlags ? [ ]
 }:
 let
-  channel = import ../../lib/rust.nix { inherit sources; };
-  rustPlatform = makeRustPlatform {
-    rustc = channel.stable.rust;
-    cargo = channel.stable.cargo;
-  };
   whitelistSource = src: allowedPrefixes:
     builtins.filterSource
       (path: type:
@@ -57,28 +52,30 @@ let
   buildProps = rec {
     name = "mayastor";
     #cargoSha256 = "0000000000000000000000000000000000000000000000000000";
-    cargoSha256 = "3ROcmInTTbK2raq9j76QiLinp4prOwYfTIDGenWEats=";
+    cargoSha256 = "jjg3nRMzSDtpy/xzm9GYa9yYQFZl5BEeheRtVe+rkqo=";
     inherit version cargoBuildFlags;
     src = whitelistSource ../../../. src_list;
     LIBCLANG_PATH = "${llvmPackages.libclang}/lib";
     PROTOC = "${protobuf}/bin/protoc";
     PROTOC_INCLUDE = "${protobuf}/include";
 
+    # Backtrace on build error.
+    RUST_BACKTRACE = "full";
+
     nativeBuildInputs = [
       pkg-config
-      protobuf
-      llvmPackages_11.clang
+      rustfmt
     ];
     buildInputs = [
       llvmPackages_11.libclang
       protobuf
       libaio
-      libiscsi.lib
+      libiscsi
       libudev
       liburing
       numactl
       openssl
-      utillinux
+      util-linux.dev
     ];
     verifyCargoDeps = false;
     doCheck = false;
@@ -111,7 +108,7 @@ in
 
     buildInputs = [
       libaio
-      libiscsi.lib
+      libiscsi
       libspdk-dev
       liburing
       libudev

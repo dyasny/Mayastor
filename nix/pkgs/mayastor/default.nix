@@ -10,12 +10,11 @@
 , libudev
 , liburing
 , llvmPackages
-, makeRustPlatform
+, rustPlatform
 , numactl
 , openssl
 , pkg-config
 , protobuf
-, sources
 , xfsprogs
 , utillinux
 , llvmPackages_11

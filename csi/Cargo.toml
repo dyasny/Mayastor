@@ -56,6 +56,5 @@ uuid = { version = "0.7", features = ["v4"] }
 which = "3.1.1"
 
 [dependencies.blkid]
-branch = "blkid-sys"
-git = "https://github.com/openebs/blkid"
-
+branch = "blkid-sys-cherrypicked"
+git = "https://github.com/hoverbear/blkid"

@@ -147,8 +147,8 @@ updated too;
           name = "node_${name}-${version}";
    -      buildInputs = [ tarWrapper python nodejs ]
    +      buildInputs = [ tarWrapper python nodejs-slim nodejs ]
-            ++ stdenv.lib.optional (stdenv.isLinux) utillinux
-            ++ stdenv.lib.optional (stdenv.isDarwin) libtool
+            ++ lib.optional (stdenv.isLinux) utillinux
+            ++ lib.optional (stdenv.isDarwin) libtool
             ++ buildInputs;
    ```
 
