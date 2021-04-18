@@ -19,7 +19,7 @@ xray_test_execution_type='10059'
 xray_send_report = (env.BRANCH_NAME == 'trying') ? false : true
 
 // if e2e run does not build its own images, which tag to use when pulling
-e2e_continuous_image_tag='v0.8.0'
+e2e_default_continuous_image_tag='v0.8.0'
 e2e_reports_dir='artifacts/reports/'
 
 // In the case of multi-branch pipelines, the pipeline
@@ -76,7 +76,7 @@ def getTag() {
     )
     return tag
   } else {
-    return e2e_continuous_image_tag
+    return params.e2e_continuous_tag
   }
 }
 
@@ -161,7 +161,7 @@ if (params.e2e_continuous == true) {
   moac_test = false
   e2e_test = true
   e2e_test_profile = "continuous"
-  // use images from dockerhub tagged with e2e_continuous_image_tag instead of building from current source
+  // use images from dockerhub tagged with e2e_default_continuous_image_tag instead of building from current source
   e2e_build_images = false
   // do not push images even when running on master/develop/release branches
   do_not_push_images = true
@@ -185,6 +185,8 @@ pipeline {
   }
   parameters {
     booleanParam(defaultValue: false, name: 'e2e_continuous')
+    booleanParam(defaultValue: false, name: 'e2e_continuous_use_ci_registry')
+    string(defaultValue: e2e_default_continuous_image_tag, name: 'e2e_continuous_tag')
   }
   triggers {
     cron(cron_schedule)
@@ -371,7 +373,7 @@ pipeline {
                   def tag = getTag()
                   def cmd = "./scripts/e2e-test.sh --device /dev/sdb --tag \"${tag}\" --logs --profile \"${e2e_test_profile}\" --build_number \"${env.BUILD_NUMBER}\" --mayastor \"${env.WORKSPACE}\" --reportsdir \"${env.WORKSPACE}/${e2e_reports_dir}\" "
                   // building images also means using the CI registry
-                  if (e2e_build_images == true) {
+                  if (e2e_build_images == true || params.e2e_continuous_use_ci_registry == true) {
                     cmd = cmd + " --registry \"" + env.REGISTRY + "\""
                   }
 
