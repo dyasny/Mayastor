@@ -282,6 +282,16 @@ impl<'a> NvmeController<'a> {
         self.state_machine.current_state()
     }
 
+    fn disable_admin_queue(&mut self) {
+        info!("*** {} admin queue disabled", self.name);
+        self.inner.as_mut().unwrap().adminq_poller.pause();
+    }
+
+    fn enable_admin_queue(&mut self) {
+        info!("*** {} admin queue enabled", self.name);
+        self.inner.as_mut().unwrap().adminq_poller.resume();
+    }
+
     /// Reset the controller.
     /// Upon reset all pending I/O operations are cancelled and all I/O handles
     /// are reinitialized.
@@ -339,7 +349,10 @@ impl<'a> NvmeController<'a> {
         };
 
         info!("{}: starting reset", self.name);
+        self.disable_admin_queue();
+
         let inner = self.inner.as_mut().unwrap();
+
         // Iterate over all I/O channels and reset/configure them one by one.
         inner.io_device.traverse_io_channels(
             NvmeController::_reset_destroy_channels,
@@ -541,6 +554,9 @@ impl<'a> NvmeController<'a> {
                     Faulted(ControllerFailureReason::ResetFailed),
                 );
             }
+
+            // Enable admin queue.
+            controller.enable_admin_queue();
 
             // Unlock the controller before calling the callback to avoid
             // potential deadlocks.

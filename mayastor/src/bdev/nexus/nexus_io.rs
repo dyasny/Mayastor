@@ -183,6 +183,13 @@ impl NexusBio {
     /// Retire(IoStatus::Success) it means that we retire the current child and
     /// then, return mark the IO successful.
     fn disposition(&mut self) -> Disposition {
+        if self.ctx_as_mut().status == IoStatus::Failed
+            && self.io_type() == IoType::Read
+        {
+            error!("read IO failed");
+            return Disposition::Retire(IoStatus::Failed);
+        }
+
         let ctx = self.ctx_as_mut();
         match ctx.status {
             // all child IO's completed, complete the parent IO
@@ -246,6 +253,10 @@ impl NexusBio {
             self.ctx_as_mut().num_ok += 1;
         } else {
             self.ctx_as_mut().status = IoStatus::Failed;
+            error!(
+                "---> Nexus I/O failed, disposition: {:?}",
+                self.disposition()
+            );
         }
 
         match self.disposition() {
@@ -265,13 +276,13 @@ impl NexusBio {
             // this child. This typically would only match when the last IO
             // has failed i.e [ok,ok,fail]
             Disposition::Retire(IoStatus::Success) => {
-                assert_eq!(success, false);
                 error!(
                     ?self,
                     ?device_name,
-                    "{}:{}",
+                    "=====> {}:{}, success={}",
                     Cores::current(),
-                    "last child IO failed completion"
+                    "last child IO failed completion",
+                    success
                 );
 
                 self.try_retire(child, status);
@@ -293,6 +304,20 @@ impl NexusBio {
                 // more IO is pending ensure we set the proper context state
                 self.ctx_as_mut().status = IoStatus::Pending;
             }
+
+            Disposition::Retire(IoStatus::Failed) => {
+                assert_eq!(success, false);
+                error!(
+                    ?self,
+                    ?device_name,
+                    "{}:{}",
+                    Cores::current(),
+                    "last child IO failed completion"
+                );
+                self.try_retire(child, status);
+                self.fail();
+            }
+
             // Disposition::Flying(_) => {
             //     assert_eq!(self.ctx().status, IoStatus::Pending);
             //     assert_ne!(self.ctx().in_flight, 0);
@@ -536,8 +561,11 @@ impl NexusBio {
                             child,
                         );
 
+                        info!("============> Pausing Nexus ...");
                         nexus.pause().await.unwrap();
+                        info!("============> Reconfiguring child");
                         nexus.reconfigure(DrEvent::ChildFault).await;
+                        info!("============>Child reconfigured");
                         // TODO: an error can occur here if a separate task,
                         // e.g. grpc request is also deleting the child.
                         if let Err(err) = child.destroy().await {

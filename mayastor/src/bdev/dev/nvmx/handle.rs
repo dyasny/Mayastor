@@ -256,6 +256,10 @@ fn complete_nvme_command(ctx: *mut NvmeIoCtx, cpl: *const spdk_nvme_cpl) {
     if op_succeeded {
         (io_ctx.cb)(&*inner.device, IoCompletionStatus::Success, io_ctx.cb_arg);
     } else {
+        error!(
+            "====> I/O failed: {:?}",
+            IoCompletionStatus::NvmeError(nvme_command_status(cpl))
+        );
         (io_ctx.cb)(
             &*inner.device,
             IoCompletionStatus::NvmeError(nvme_command_status(cpl)),
