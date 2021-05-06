@@ -25,7 +25,7 @@ mkShell {
     kubectl
     kind
     docker
-    clang
+    clang_11
     cowsay
     e2fsprogs
     fio
@@ -40,7 +40,7 @@ mkShell {
     libiscsi
     libudev
     liburing
-    llvmPackages.libclang
+    llvmPackages_11.libclang
     nats-server
     nodejs-12_x
     numactl
