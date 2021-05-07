@@ -17,6 +17,7 @@ use nix::errno::Errno;
 use snafu::ResultExt;
 use tracing::instrument;
 use url::Url;
+use uuid::Uuid;
 
 use controller::options::NvmeControllerOpts;
 use poller::Poller;
@@ -191,6 +192,18 @@ impl<'probe> NvmeControllerContext<'probe> {
         let mut opts = controller::options::Builder::new()
             .with_keep_alive_timeout_ms(device_defaults.keep_alive_timeout_ms)
             .with_transport_retry_count(device_defaults.retry_count as u8);
+
+        if let Ok(ext_host_id) = std::env::var("MAYASTOR_NVMF_HOSTID") {
+            if let Ok(uuid) = Uuid::parse_str(&ext_host_id) {
+                opts = opts.with_ext_host_id(*uuid.as_bytes());
+                if std::env::var("HOSTNQN").is_err() {
+                    opts = opts.with_hostnqn(format!(
+                        "nqn.2019-05.io.openebs:uuid:{}",
+                        uuid
+                    ));
+                }
+            }
+        }
 
         if let Ok(host_nqn) = std::env::var("HOSTNQN") {
             opts = opts.with_hostnqn(host_nqn);
