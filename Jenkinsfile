@@ -58,8 +58,8 @@ def isTimed() {
 }
 
 def getAliasTag() { // alternative tag for CI pushed images
-    if (isTimed() == true) {
-        return 'nightly'
+    if (isTimed() == true || params.run_as_nightly == true) {
+      return 'nightly'
     }
     return 'ci'
 }
@@ -81,11 +81,8 @@ def getTestPlan() {
   if (params.e2e_continuous == true)  {
     return xray_continuous_testplan
   }
-  def causes = currentBuild.getBuildCauses()
-  for(cause in causes) {
-    if ("${cause}".contains("hudson.triggers.TimerTrigger\$TimerTriggerCause")) {
-      return xray_nightly_testplan
-    }
+  if (isTimed() == true) {
+    return xray_nightly_testplan
   }
   return xray_on_demand_testplan
 }
@@ -187,6 +184,7 @@ pipeline {
   }
   parameters {
     booleanParam(defaultValue: false, name: 'e2e_continuous')
+    booleanParam(defaultValue: false, name: 'run_as_nightly')
   }
   triggers {
     cron(cron_schedule)
