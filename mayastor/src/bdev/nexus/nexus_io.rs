@@ -295,7 +295,11 @@ impl NexusBio {
                 trace!(
                     "(core: {} thread: {}): read IO to {} submission failed with error {:?}",
                     Cores::current(), Mthread::current().unwrap().name(), device, r);
-                inner.remove_child_in_submit(&device);
+                let need_retire = inner.remove_child_in_submit(&device);
+                if need_retire {
+                    self.do_retire(device);
+                }
+
                 self.fail();
             } else {
                 self.ctx_as_mut().in_flight += 1;
