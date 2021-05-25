@@ -518,13 +518,15 @@ impl NexusBio {
 
         // if there are channels left -- retry the IO other wise fail the IO.
         // TODO: succesfull IO's would not require a retry.
-        if self.inner_channel().writers.is_empty()
-            || self.inner_channel().readers.is_empty()
-        {
-            self.fail_checked();
-        } else {
-            self.retry_checked();
-        }
+        self.fail_checked();
+
+        //        if self.inner_channel().writers.is_empty()
+        //            || self.inner_channel().readers.is_empty()
+        //        {
+        //            self.fail_checked();
+        //        } else {
+        //            self.retry_checked();
+        //        }
     }
 
     /// Retire a child for this nexus.
