@@ -532,7 +532,7 @@ impl NexusChild {
     /// destroy the child device
     pub async fn destroy(&self) -> Result<(), NexusBdevError> {
         if self.device.is_some() {
-            self.set_state(ChildState::Destroying);
+            //self.set_state(ChildState::Destroying);
             info!("{} destroying underlying block device", self.name);
             let rc = device_destroy(&self.name).await;
             info!(

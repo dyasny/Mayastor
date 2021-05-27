@@ -29,7 +29,7 @@ async def nvme_remote_connect(remote, uri):
 
     # we should only have one connection
     assert len(dev) == 1
-    dev_path = dev[0].get('Controllers')[0].get(
+    dev_path = dev[0].get(
         'Namespaces')[0].get('NameSpace')
 
     return f"/dev/{dev_path}"

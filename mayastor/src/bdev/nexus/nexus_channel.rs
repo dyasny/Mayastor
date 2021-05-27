@@ -34,7 +34,7 @@ pub(crate) struct NexusChannelInner {
     pub(crate) readers: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) previous: usize,
     pub(crate) fail_fast: u32,
-    pub (crate) write_queue: Vec<NexusBio>,
+    pub(crate) write_queue: Vec<NexusBio>,
     pub(crate) write_freeze: bool,
     device: *mut c_void,
 }
@@ -121,6 +121,16 @@ impl NexusChannelInner {
             self.writers.len(),
             self.readers.len(),
         );
+
+        let child_in_channel = self
+            .readers
+            .iter()
+            .any(|c| c.get_device().device_name() != name)
+            || self
+                .writers
+                .iter()
+                .any(|c| c.get_device().device_name() != name);
+
         self.readers
             .retain(|c| c.get_device().device_name() != name);
         self.writers
@@ -133,7 +143,8 @@ impl NexusChannelInner {
             self.readers.len(),
             nexus.children.len()
         );
-        self.fault_child(name)
+
+        child_in_channel
     }
 
     /// Fault the child by marking its status.
