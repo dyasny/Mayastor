@@ -26,6 +26,7 @@
 #include <spdk/nvme.h>
 #include <spdk/nvmf.h>
 #include <nvmf/nvmf_internal.h>
+#include <nvme/nvme_internal.h>
 #include <spdk/rpc.h>
 #include <spdk/scsi.h>
 #include <spdk/thread.h>

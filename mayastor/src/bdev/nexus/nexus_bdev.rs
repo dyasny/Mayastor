@@ -754,12 +754,17 @@ impl Nexus {
     pub async fn pause(&mut self) -> Result<(), Error> {
         assert_eq!(Cores::current(), Cores::first());
 
-        let state = self.pause_state.compare_exchange(NexusPauseState::Unpaused, NexusPauseState::Pausing).unwrap();
+        let state = self
+            .pause_state
+            .compare_exchange(
+                NexusPauseState::Unpaused,
+                NexusPauseState::Pausing,
+            )
+            .unwrap();
 
         match state {
             // Pause nexus if its unpaused.
             NexusPauseState::Unpaused => {
-
                 info!("{} pausing nexus", self.name);
                 if let Some(Protocol::Nvmf) = self.shared() {
                     if let Some(subsystem) =
@@ -778,7 +783,12 @@ impl Nexus {
                         );
                     }
                 }
-                self.pause_state.compare_exchange(NexusPauseState::Pausing, NexusPauseState::Paused).unwrap();
+                self.pause_state
+                    .compare_exchange(
+                        NexusPauseState::Pausing,
+                        NexusPauseState::Paused,
+                    )
+                    .unwrap();
                 info!("{} nexus paused", self.name);
             }
             // Wait till the pauser unpauses the nexus.

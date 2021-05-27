@@ -216,8 +216,8 @@ impl NexusBio {
         if self.ctx().in_flight == 0 {
             if self.ctx().must_fail {
                 if self.inner_channel().writers.len() > 1 {
-                warn!(?self, "resubmitted due to must_fail");
-                self.retry_checked();
+                    warn!(?self, "resubmitted due to must_fail");
+                    self.retry_checked();
                 } else {
                     self.fail();
                 }
@@ -481,14 +481,10 @@ impl NexusBio {
     }
 
     fn do_retire(&self, child: String) {
-        if self.inner_channel().writers.len() > 1 {
-            Reactors::master().send_future(Self::child_retire(
-                self.nexus_as_ref().name.clone(),
-                child,
-            ));
-        } else {
-            warn!("Skipping retire of last child");
-        }
+        Reactors::master().send_future(Self::child_retire(
+            self.nexus_as_ref().name.clone(),
+            child,
+        ));
 
         //  match self.nexus_as_ref().child_lookup(&child) {
         //      Some(child) => {
@@ -591,12 +587,12 @@ impl NexusBio {
                                 // separate task,
                                 // e.g. grpc request is also deleting the
                                 // child.
-                                if let Err(err) = child.destroy().await {
-                                    error!(
-                                        "{}: destroying child {} failed {}",
-                                        nexus, child, err
-                                    );
-                                }
+                                //if let Err(err) = child.destroy().await {
+                                //    error!(
+                                //        "{}: destroying child {} failed {}",
+                                //        nexus, child, err
+                                //    );
+                                //}
                             }
                             None => {
                                 warn!(

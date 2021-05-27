@@ -19,8 +19,11 @@ use mayastor::{
 use std::path::Path;
 use structopt::StructOpt;
 mayastor::CPS_INIT!();
-use mayastor::{persistent_store::PersistentStore, subsys::Registration};
-use mayastor::core::{PAUSED, PAUSING};
+use mayastor::{
+    core::{PAUSED, PAUSING},
+    persistent_store::PersistentStore,
+    subsys::Registration,
+};
 
 // manual call to a gRCP method.
 async fn reaper() {
@@ -72,7 +75,7 @@ fn start_tokio_runtime(args: &MayastorCliArgs) {
 
     Mthread::spawn_unaffinitized(move || {
         runtime::block_on(async move {
-  //          runtime::spawn(reaper());
+            //          runtime::spawn(reaper());
             let mut futures = Vec::new();
             if let Some(endpoint) = endpoint {
                 debug!("mayastor mbus subsystem init");

@@ -18,7 +18,7 @@ rm libspdk.so
 	--enable-unit-tests \
 	--with-fio=$(which fio | sed s';bin/fio;include;')
 
-bear -- make -j 4
+make -j 12
 
 # delete things we for sure do not want link
 find . -type f -name 'libspdk_event_nvmf.a' -delete

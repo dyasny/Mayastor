@@ -34,7 +34,7 @@ pub(crate) struct NexusChannelInner {
     pub(crate) readers: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) previous: usize,
     pub(crate) fail_fast: u32,
-    pub (crate) write_queue: Vec<NexusBio>,
+    pub(crate) write_queue: Vec<NexusBio>,
     pub(crate) write_freeze: bool,
     device: *mut c_void,
 }

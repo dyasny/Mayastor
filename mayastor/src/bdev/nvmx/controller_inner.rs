@@ -93,6 +93,13 @@ impl TimeoutConfig {
         }
     }
 
+    fn shutdown_cb(success: bool, ctx: *mut c_void) {
+        let timeout_ctx = TimeoutConfig::from_ptr(ctx as *mut TimeoutConfig);
+        if success {
+            info!("{} controller shut down successfully", timeout_ctx.name);
+        }
+    }
+
     fn reset_cb(success: bool, ctx: *mut c_void) {
         let timeout_ctx = TimeoutConfig::from_ptr(ctx as *mut TimeoutConfig);
 
@@ -155,10 +162,9 @@ impl TimeoutConfig {
 
             if let Some(c) = NVME_CONTROLLERS.lookup_by_name(&self.name) {
                 let mut c = c.lock();
-                if let Err(e) = c.reset(
-                    TimeoutConfig::reset_cb,
+                if let Err(e) = c.shutdown(
+                    TimeoutConfig::shutdown_cb,
                     self as *mut TimeoutConfig as *mut c_void,
-                    false,
                 ) {
                     error!(
                         "{}: failed to initiate controller reset: {}",
