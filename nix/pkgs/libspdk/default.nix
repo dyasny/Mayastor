@@ -3,6 +3,7 @@
 , fetchFromGitHub
 , pkg-config
 , lcov
+, lib
 , libaio
 , libiscsi
 , libbpf
@@ -43,7 +44,7 @@ let
       repo = "spdk";
       rev = "3f85fb587d7a1013f3fab9304805dd943d95c0a2";
       sha256 = "0z7iw5xa2l4xrbl3zd4139mdyfd236gkswmysnkswmpmw7s6krsc";
-      #sha256 = stdenv.lib.fakeSha256;
+      #sha256 = lib.fakeSha256;
       fetchSubmodules = true;
     };
 
