@@ -195,7 +195,7 @@ impl NexusBio {
             self.ok_checked();
         } else {
             // IO failure, mark the IO failed and take the child out
-            error!(?self, "{} IO completion failed", child.device_name());
+            error!(?self, "{} IO completion failed: {:?}", child.device_name(), self.ctx());
             self.ctx_as_mut().status = IoStatus::Failed;
             self.ctx_as_mut().must_fail = true;
             self.handle_failure(child, status);
@@ -207,7 +207,8 @@ impl NexusBio {
     /// a lockup.
     fn ok_checked(&mut self) {
         if self.ctx().in_flight == 0 {
-            if self.ctx().submission_failure {
+            if self.ctx().must_fail {
+                warn!(?self, "resubmitted due to must_fail");
                 self.retry_checked();
             } else {
                 self.ok();
@@ -298,14 +299,11 @@ impl NexusBio {
                 trace!(
                     "(core: {} thread: {}): read IO to {} submission failed with error {:?}",
                     Cores::current(), Mthread::current().unwrap().name(), device, r);
-                let need_retire = inner.remove_child_in_submit(&device);
-                if need_retire {
-                    self.do_retire(device);
-                }
+                let _ = inner.remove_child_in_submit(&device);
 
                 self.fail();
             } else {
-                self.ctx_as_mut().in_flight += 1;
+                self.ctx_as_mut().in_flight = 1;
             }
             r
         } else {
@@ -448,12 +446,9 @@ impl NexusBio {
         if result.is_err() {
             let device = failed_device.unwrap();
             // set the IO as failed in the submission stage.
-            self.ctx_as_mut().submission_failure = true;
-            let need_retire =
+            self.ctx_as_mut().must_fail = true;
+            let _ =
                 self.inner_channel().remove_child_in_submit(&device);
-            if need_retire {
-                self.do_retire(device);
-            }
         }
 
         // partial submission
@@ -461,7 +456,7 @@ impl NexusBio {
             // An error was experienced during submission. Some IO however, has
             // been submitted successfully prior to the error condition.
             self.ctx_as_mut().in_flight = inflight;
-            self.ctx_as_mut().status = IoStatus::Failed;
+            self.ctx_as_mut().status = IoStatus::Success;
         }
 
         self.fail_checked();
