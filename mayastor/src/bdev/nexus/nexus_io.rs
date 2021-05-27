@@ -34,9 +34,10 @@ use crate::{
         NvmeCommandStatus,
         Reactors,
         DEAD_LIST,
+        PAUSED,
+        PAUSING,
     },
 };
-use crate::core::{PAUSED, PAUSING};
 use std::sync::atomic::Ordering;
 
 #[allow(unused_macros)]
@@ -101,6 +102,7 @@ pub struct NioCtx {
     channel: NonNull<spdk_io_channel>,
     /// the IO must fail regardless of when it completes
     must_fail: bool,
+    retries: u8,
     /// the IO experienced an error condition during submission. This must be
     /// handled differently
     submission_failure: bool,
@@ -195,7 +197,12 @@ impl NexusBio {
             self.ok_checked();
         } else {
             // IO failure, mark the IO failed and take the child out
-            error!(?self, "{} IO completion failed: {:?}", child.device_name(), self.ctx());
+            error!(
+                ?self,
+                "{} IO completion failed: {:?}",
+                child.device_name(),
+                self.ctx()
+            );
             self.ctx_as_mut().status = IoStatus::Failed;
             self.ctx_as_mut().must_fail = true;
             self.handle_failure(child, status);
@@ -208,8 +215,12 @@ impl NexusBio {
     fn ok_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             if self.ctx().must_fail {
+                if self.inner_channel().writers.len() > 1 {
                 warn!(?self, "resubmitted due to must_fail");
                 self.retry_checked();
+                } else {
+                    self.fail();
+                }
             } else {
                 self.ok();
             }
@@ -299,7 +310,10 @@ impl NexusBio {
                 trace!(
                     "(core: {} thread: {}): read IO to {} submission failed with error {:?}",
                     Cores::current(), Mthread::current().unwrap().name(), device, r);
-                let _ = inner.remove_child_in_submit(&device);
+                let must_retire = inner.remove_child_in_submit(&device);
+                if must_retire {
+                    self.do_retire(device);
+                }
 
                 self.fail();
             } else {
@@ -405,7 +419,6 @@ impl NexusBio {
     /// avoid double frees. This function handles IO for a subset that must
     /// be submitted to all the underlying children.
     fn submit_all(&mut self) -> Result<(), CoreError> {
-
         let mut inflight = 0;
         // Name of the device which experiences I/O submission failures.
         let mut failed_device = None;
@@ -447,8 +460,11 @@ impl NexusBio {
             let device = failed_device.unwrap();
             // set the IO as failed in the submission stage.
             self.ctx_as_mut().must_fail = true;
-            let _ =
+            let must_retire =
                 self.inner_channel().remove_child_in_submit(&device);
+            if must_retire {
+                self.do_retire(device);
+            }
         }
 
         // partial submission
@@ -465,11 +481,14 @@ impl NexusBio {
     }
 
     fn do_retire(&self, child: String) {
-        // Reactors::master().send_future(Self::child_retire(
-        //     self.nexus_as_ref().name.clone(),
-        //     child,
-        // ));
-        //  let nexus = self.nexus_as_ref();
+        if self.inner_channel().writers.len() > 1 {
+            Reactors::master().send_future(Self::child_retire(
+                self.nexus_as_ref().name.clone(),
+                child,
+            ));
+        } else {
+            warn!("Skipping retire of last child");
+        }
 
         //  match self.nexus_as_ref().child_lookup(&child) {
         //      Some(child) => {
@@ -486,13 +505,16 @@ impl NexusBio {
         child: &dyn BlockDevice,
         status: IoCompletionStatus,
     ) {
-        // We have experienced a failure on one of the child devices. We need to ensure we do not
-        // submit more IOs to this child. We do not need to tell other cores about this because
-        // they will experience the same errors on their own channels, and handle it on their own.
+        // We have experienced a failure on one of the child devices. We need to
+        // ensure we do not submit more IOs to this child. We do not
+        // need to tell other cores about this because
+        // they will experience the same errors on their own channels, and
+        // handle it on their own.
         //
-        // We differentiate between errors in the submission and completion.  When we have a
-        // completion error, it typically means that the child has lost the connection to the
-        // nexus. In order for outstanding IO to complete, the IO's to that child must be aborted.
+        // We differentiate between errors in the submission and completion.
+        // When we have a completion error, it typically means that the
+        // child has lost the connection to the nexus. In order for
+        // outstanding IO to complete, the IO's to that child must be aborted.
         // The abortion is implicit when removing the device.
 
         trace!(?status);
@@ -615,7 +637,8 @@ impl NexusBio {
 
             if let Some(child) = n.child_lookup(&device) {
                 info!("enqueue retire for {} of child {}", nexus, device);
-                DEAD_LIST.push(Command::Retire(nexus.clone(), child.name.clone()));
+                DEAD_LIST
+                    .push(Command::Retire(nexus.clone(), child.name.clone()));
             }
         }
     }

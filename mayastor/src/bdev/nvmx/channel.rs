@@ -393,9 +393,9 @@ extern "C" fn disconnected_qpair_cb(
 ) {
     let inner = NvmeIoChannel::from_raw(ctx).inner_mut();
 
-    warn!(?qpair, "NVMe qpair disconnected");
+    //warn!(?qpair, "NVMe qpair disconnected");
     // shutdown the channel such that pending IO if any, gets aborted.
-    inner.shutdown();
+    //inner.shutdown();
 }
 
 extern "C" fn nvme_poll(ctx: *mut c_void) -> i32 {
