@@ -422,7 +422,7 @@ impl mayastor_server::Mayastor for MayastorSvc {
                 nexus_list: instances()
                     .iter()
                     .filter(|n| {
-                        n.state.lock().unwrap().deref()
+                        n.state.lock().deref()
                             != &nexus_bdev::NexusState::Init
                     })
                     .map(|n| n.to_grpc())

@@ -18,6 +18,7 @@ use spdk_sys::{
     spdk_nvme_async_event_completion,
     spdk_nvme_cpl,
     spdk_nvme_ctrlr,
+    spdk_nvme_ctrlr_fail,
     spdk_nvme_ctrlr_get_ns,
     spdk_nvme_ctrlr_is_active_ns,
     spdk_nvme_ctrlr_process_admin_completions,
@@ -394,10 +395,7 @@ impl<'a> NvmeController<'a> {
         // I/O channels are closed.
         // TODO: fail the controller via spdk_nvme_ctrlr_fail() upon shutdown ?
         //debug!("{} resetting NVMe controller", ctx.name);
-        //let rc = unsafe { spdk_nvme_ctrlr_reset(controller.ctrlr_as_ptr()) };
-        //if rc != 0 {
-        //    error!("{} failed to reset controller, rc = {}", ctx.name, rc);
-        //}
+        unsafe { spdk_nvme_ctrlr_fail(controller.ctrlr_as_ptr()) };
 
         // Finalize controller shutdown and invoke callback.
         controller.clear_namespaces();
@@ -797,8 +795,8 @@ pub extern "C" fn nvme_poll_adminq(ctx: *mut c_void) -> i32 {
     let rc =
         unsafe { spdk_nvme_ctrlr_process_admin_completions(context.ctrlr) };
     if rc < 0 {
-        //  unsafe { spdk_nvme_ctrlr_fail(context.ctrlr) };
-        // context.reset_controller();
+        //unsafe { spdk_nvme_ctrlr_fail(context.ctrlr) };
+        //context.reset_controller();
     }
 
     if rc == 0 {
@@ -1044,7 +1042,6 @@ pub(crate) mod options {
                 };
             }
 
-            opts.0.disable_error_logging = true;
             opts
         }
     }

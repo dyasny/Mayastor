@@ -19,6 +19,8 @@ use crate::{
     core::{BlockDeviceHandle, Cores, Mthread},
 };
 
+use super::nexus_io::NexusBio;
+
 /// io channel, per core
 #[repr(C)]
 #[derive(Debug)]
@@ -32,6 +34,8 @@ pub(crate) struct NexusChannelInner {
     pub(crate) readers: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) previous: usize,
     pub(crate) fail_fast: u32,
+    pub (crate) write_queue: Vec<NexusBio>,
+    pub(crate) write_freeze: bool,
     device: *mut c_void,
 }
 
@@ -103,6 +107,7 @@ impl NexusChannelInner {
 
     /// Remove a child from the readers and/or writers
     pub fn remove_child_in_submit(&mut self, name: &str) -> bool {
+        self.previous = 0;
         let nexus = unsafe { Nexus::from_raw(self.device) };
         trace!(
             ?name,
@@ -241,9 +246,11 @@ impl NexusChannel {
         let mut channels = Box::new(NexusChannelInner {
             writers: Vec::new(),
             readers: Vec::new(),
+            write_queue: Vec::new(),
             previous: 0,
             device,
             fail_fast: 0,
+            write_freeze: false,
         });
 
         nexus

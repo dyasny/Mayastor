@@ -45,6 +45,7 @@ use crate::{
     rebuild::RebuildError,
     subsys::{NvmfError, NvmfSubsystem},
 };
+use crossbeam::atomic::AtomicCell;
 
 /// Obtain the full error chain
 pub trait VerboseError {
@@ -306,7 +307,7 @@ pub enum NexusTarget {
     NexusIscsiTarget,
     NexusNvmfTarget,
 }
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum NexusPauseState {
     Unpaused,
     Pausing,
@@ -330,7 +331,7 @@ pub struct Nexus {
     /// raw pointer to bdev (to destruct it later using Box::from_raw())
     bdev_raw: *mut spdk_bdev,
     /// represents the current state of the Nexus
-    pub(super) state: parking_lot::Mutex<NexusState>,
+    pub state: parking_lot::Mutex<NexusState>,
     /// the offset in num blocks where the data partition starts
     pub data_ent_offset: u64,
     /// the handle to be used when sharing the nexus, this allows for the bdev
@@ -341,7 +342,7 @@ pub struct Nexus {
     /// Nexus I/O device.
     pub io_device: Option<IoDevice>,
     /// Nexus pause counter to allow concurrent pause/resume.
-    pause_state: NexusPauseState,
+    pause_state: AtomicCell<NexusPauseState>,
     pause_waiters: Vec<oneshot::Sender<i32>>,
     /// information saved to a persistent store
     pub nexus_info: futures::lock::Mutex<NexusInfo>,
@@ -478,7 +479,7 @@ impl Nexus {
             size,
             nexus_target: None,
             io_device: None,
-            pause_state: NexusPauseState::Unpaused,
+            pause_state: AtomicCell::new(NexusPauseState::Unpaused),
             pause_waiters: Vec::new(),
             nexus_info: futures::lock::Mutex::new(Default::default()),
         });
@@ -699,11 +700,11 @@ impl Nexus {
     }
 
     /// Resume IO to the bdev.
-    /// Note: in order to handle cuncurrent resumes properly, this function must
+    /// Note: in order to handle concurrent resumes properly, this function must
     /// be called only from the master core.
-    pub(crate) async fn resume(&mut self) -> Result<(), Error> {
+    pub async fn resume(&mut self) -> Result<(), Error> {
         assert_eq!(Cores::current(), Cores::first());
-        assert_eq!(self.pause_state, NexusPauseState::Paused);
+        assert_eq!(self.pause_state.load(), NexusPauseState::Paused);
 
         info!(
             "{} resuming nexus, waiters: {}",
@@ -714,7 +715,7 @@ impl Nexus {
         if let Some(Protocol::Nvmf) = self.shared() {
             if self.pause_waiters.is_empty() {
                 if let Some(subsystem) = NvmfSubsystem::nqn_lookup(&self.name) {
-                    self.pause_state = NexusPauseState::Unpausing;
+                    self.pause_state.store(NexusPauseState::Unpausing);
                     subsystem.resume().await.unwrap();
                     // The trickiest case: a new waiter appeared during nexus
                     // unpausing. By the agreement we keep
@@ -726,7 +727,7 @@ impl Nexus {
                             self.name,
                         );
                         subsystem.pause().await.unwrap();
-                        self.pause_state = NexusPauseState::Paused;
+                        self.pause_state.store(NexusPauseState::Paused);
                     }
                 }
             }
@@ -737,7 +738,7 @@ impl Nexus {
             let s = self.pause_waiters.pop().unwrap();
             s.send(0).expect("Nexus pause waiter disappeared");
         } else {
-            self.pause_state = NexusPauseState::Unpaused;
+            self.pause_state.store(NexusPauseState::Unpaused);
         }
 
         Ok(())
@@ -748,15 +749,16 @@ impl Nexus {
     /// In case concurrent pause requests take place, the other callers
     /// will wait till the nexus is resumed and will continue execution
     /// with the nexus paused once they are awakened via resume().
-    /// Note: in order to handle cuncurrent pauses properly, this function must
+    /// Note: in order to handle concurrent pauses properly, this function must
     /// be called only from the master core.
-    pub(crate) async fn pause(&mut self) -> Result<(), Error> {
+    pub async fn pause(&mut self) -> Result<(), Error> {
         assert_eq!(Cores::current(), Cores::first());
 
-        match self.pause_state {
+        let state = self.pause_state.compare_exchange(NexusPauseState::Unpaused, NexusPauseState::Pausing).unwrap();
+
+        match state {
             // Pause nexus if its unpaused.
             NexusPauseState::Unpaused => {
-                self.pause_state = NexusPauseState::Pausing;
 
                 info!("{} pausing nexus", self.name);
                 if let Some(Protocol::Nvmf) = self.shared() {
@@ -776,7 +778,7 @@ impl Nexus {
                         );
                     }
                 }
-                self.pause_state = NexusPauseState::Paused;
+                self.pause_state.compare_exchange(NexusPauseState::Pausing, NexusPauseState::Paused).unwrap();
                 info!("{} nexus paused", self.name);
             }
             // Wait till the pauser unpauses the nexus.
@@ -791,7 +793,7 @@ impl Nexus {
 
                 r.await.expect("Nexus pause sender disappeared");
                 info!("{} pause is granted", self.name,);
-                assert_eq!(self.pause_state, NexusPauseState::Paused);
+                assert_eq!(self.pause_state.load(), NexusPauseState::Paused);
             }
         }
 
@@ -827,12 +829,12 @@ impl Nexus {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn set_failfast(&self) -> Result<(), Error> {
+    pub async fn set_failfast(&self) -> Result<(), Error> {
         self.update_failfast(true).await
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn clear_failfast(&self) -> Result<(), Error> {
+    pub async fn clear_failfast(&self) -> Result<(), Error> {
         self.update_failfast(false).await
     }
 

@@ -2,8 +2,16 @@
 extern crate tracing;
 use futures::future::FutureExt;
 use mayastor::{
-    bdev::util::uring,
-    core::{runtime, MayastorCliArgs, MayastorEnvironment, Mthread, Reactors},
+    bdev::{device_destroy, nexus_lookup, util::uring},
+    core::{
+        runtime,
+        Command,
+        MayastorCliArgs,
+        MayastorEnvironment,
+        Mthread,
+        Reactors,
+        DEAD_LIST,
+    },
     grpc,
     logger,
     subsys,
@@ -12,6 +20,44 @@ use std::path::Path;
 use structopt::StructOpt;
 mayastor::CPS_INIT!();
 use mayastor::{persistent_store::PersistentStore, subsys::Registration};
+use mayastor::core::{PAUSED, PAUSING};
+
+// manual call to a gRCP method.
+async fn reaper() {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        dbg!(&PAUSED);
+        dbg!(&PAUSING);
+        dbg!(DEAD_LIST.len());
+
+        if let Ok(cmd) = DEAD_LIST.pop() {
+            match cmd {
+                Command::Retire(nexus, child) => {
+                    info!("got a dead child {}", child);
+                    let rx = Mthread::get_init().spawn_local(async move {
+                        if let Some(nexus) = nexus_lookup(&nexus) {
+                            match nexus.child_lookup(&child) {
+                                Some(child) => {
+                                    if let Err(err) = child.destroy().await {
+                                        error!(
+                                            "{}: destroying child {} failed {}",
+                                            nexus, child, err
+                                        );
+                                    }
+                                }
+                                None => {}
+                            }
+
+                            nexus.clear_failfast().await.unwrap();
+                            nexus.resume().await.unwrap();
+                        }
+                    });
+                    dbg!(rx.unwrap().await);
+                }
+            }
+        }
+    }
+}
 
 fn start_tokio_runtime(args: &MayastorCliArgs) {
     let grpc_address = grpc::endpoint(args.grpc_endpoint.clone());
@@ -26,6 +72,7 @@ fn start_tokio_runtime(args: &MayastorCliArgs) {
 
     Mthread::spawn_unaffinitized(move || {
         runtime::block_on(async move {
+  //          runtime::spawn(reaper());
             let mut futures = Vec::new();
             if let Some(endpoint) = endpoint {
                 debug!("mayastor mbus subsystem init");
