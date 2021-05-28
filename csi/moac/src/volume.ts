@@ -9,8 +9,10 @@ import { Replica } from './replica';
 import { Child, Nexus, Protocol } from './nexus';
 import { Pool } from './pool';
 import { Node } from './node';
+import { Registry } from './registry';
+import { Logger } from './logger';
 
-const log = require('./logger').Logger('volume');
+const log = Logger('volume');
 
 // If state transition in FSA fails due to an error and there is no consumer
 // for the error, we set a retry timer to retry the state transition.
@@ -95,10 +97,11 @@ export class Volume {
   private publishedOn: string | undefined;
   // internal properties
   private emitter: events.EventEmitter;
-  private registry: any;
+  private registry: Registry;
   private runFsa: number; // number of requests to run FSA
-  private waiting: Record<DelegatedOp, DoneCallback>; // ops waiting for completion
+  private waiting: Record<DelegatedOp, DoneCallback[]>; // ops waiting for completion
   private retry_fsa: NodeJS.Timeout | undefined;
+  private pendingDestroy: boolean;
 
   // Construct a volume object with given uuid.
   //
@@ -111,7 +114,7 @@ export class Volume {
   //
   constructor(
     uuid: string,
-    registry: any,
+    registry: Registry,
     emitter: events.EventEmitter,
     spec: VolumeSpec,
     state?: VolumeState,
@@ -128,10 +131,15 @@ export class Volume {
     this.nexus = null;
     this.replicas = {};
     this.state = state || VolumeState.Pending;
+    this.pendingDestroy = false;
     // other properties
     this.runFsa = 0;
     this.emitter = emitter;
-    this.waiting = <Record<DelegatedOp, DoneCallback>> {};
+    this.waiting = <Record<DelegatedOp, DoneCallback[]>> {};
+    this.waiting[DelegatedOp.Create] = [];
+    this.waiting[DelegatedOp.Publish] = [];
+    this.waiting[DelegatedOp.Unpublish] = [];
+    this.waiting[DelegatedOp.Destroy] = [];
   }
 
   // Clear the timer on the volume to prevent it from keeping nodejs loop alive.
@@ -162,6 +170,20 @@ export class Volume {
   // Return volume replicas.
   getReplicas(): Replica[] {
     return Object.values(this.replicas);
+  }
+
+  // Return volume nexus.
+  getNexus(): Nexus | undefined {
+    return this.nexus || undefined;
+  }
+
+  // Return whether the volume can still be used and is updatable.
+  isSpecUpdatable (): boolean {
+    return ([
+      VolumeState.Unknown,
+      VolumeState.Pending,
+      VolumeState.Destroyed,
+    ].indexOf(this.state) < 0);
   }
 
   // Publish the volume. That means, make it accessible through a target.
@@ -233,6 +255,13 @@ export class Volume {
 
   // Delete nexus and destroy all replicas of the volume.
   async destroy() {
+    // If the volume is still being created then we cannot change the state
+    // because fsa would immediately start to act on it.
+    if (this.state === VolumeState.Pending) {
+      this.pendingDestroy = true;
+      await this._delegate(DelegatedOp.Destroy);
+      return;
+    }
     // Set the new desired state
     this.publishedOn = undefined;
     this._setState(VolumeState.Destroyed);
@@ -322,7 +351,18 @@ export class Volume {
           grpcCode.INTERNAL,
           `Failed to destroy a replica of ${this}: ${err}`,
         ));
+        return;
       }
+      try {
+        await this.registry.getPersistentStore().destroyNexus(this.uuid);
+      } catch (err) {
+        this._delegatedOpFailed([DelegatedOp.Destroy], new GrpcError(
+          grpcCode.INTERNAL,
+          `Failed to destroy entry from the persistent store of ${this}: ${err}`,
+        ));
+        return;
+      }
+
       this._delegatedOpSuccess(DelegatedOp.Destroy);
       if (this.retry_fsa) {
         clearTimeout(this.retry_fsa);
@@ -602,9 +642,10 @@ export class Volume {
         pair.r &&
         pair.ch.state === 'CHILD_ONLINE' &&
         this.spec.requiredNodes.length > 0 &&
-        this.spec.requiredNodes.indexOf(pair.r.pool!.node.name) < 0
+        pair.r.pool?.node &&
+        this.spec.requiredNodes.indexOf(pair.r.pool.node.name) < 0
       ) {
-        if (this.spec.requiredNodes.indexOf(pair.r.pool!.node.name) < 0) {
+        if (this.spec.requiredNodes.indexOf(pair.r.pool.node.name) < 0) {
           return true;
         }
       }
@@ -641,14 +682,13 @@ export class Volume {
   // with success or failure).
   async _delegate(op: DelegatedOp): Promise<unknown> {
     return new Promise((resolve: (res: unknown) => void, reject: (err: any) => void) => {
-      assert(!this.waiting[op]);
-      this.waiting[op] = (err: any, res: unknown) => {
+      this.waiting[op].push((err: any, res: unknown) => {
         if (err) {
           reject(err);
         } else {
           resolve(res);
         }
-      };
+      });
       this.fsa();
     });
   }
@@ -656,11 +696,9 @@ export class Volume {
   // A state transition corresponding to certain finished operation on the
   // volume has been done. Inform registered consumer about it.
   _delegatedOpSuccess(op: DelegatedOp, result?: unknown) {
-    let cb = this.waiting[op];
-    if (cb) {
-      delete this.waiting[op];
-      cb(undefined, result);
-    }
+    this.waiting[op]
+      .splice(0, this.waiting[op].length)
+      .forEach((cb) => cb(undefined, result));
   }
 
   // An error has been encountered while making a state transition to desired
@@ -671,12 +709,12 @@ export class Volume {
   _delegatedOpFailed(ops: DelegatedOp[], err: Error) {
     let reported = false;
     ops.forEach((op) => {
-      let cb = this.waiting[op];
-      if (cb) {
-        reported = true;
-        delete this.waiting[op];
-        cb(err);
-      }
+      this.waiting[op]
+        .splice(0, this.waiting[op].length)
+        .forEach((cb) => {
+          reported = true;
+          cb(err);
+        });
     });
     if (!reported) {
       let msg;
@@ -695,11 +733,9 @@ export class Volume {
   // returning specified error.
   _delegatedOpCancel(ops: DelegatedOp[], err: Error) {
     ops.forEach((op) => {
-      let cb = this.waiting[op];
-      if (cb) {
-        delete this.waiting[op];
-        cb(err);
-      }
+      this.waiting[op]
+        .splice(0, this.waiting[op].length)
+        .forEach((cb) => cb(err));
     });
   }
 
@@ -726,6 +762,9 @@ export class Volume {
   // NOTE: Until we switch state from "pending" at the end, the volume is not
   // acted upon by FSA. That's exactly what we want, because the async events
   // produced by this function do not interfere with execution of the "create".
+  //
+  // We have to check pending destroy flag after each async step in case that
+  // someone destroyed the volume before it was fully created.
   async create() {
     log.debug(`Creating the volume "${this}"`);
 
@@ -736,6 +775,12 @@ export class Volume {
     if (newReplicaCount > 0) {
       // create more replicas if higher replication factor is desired
       await this._createReplicas(newReplicaCount);
+      if (this.pendingDestroy) {
+        throw new GrpcError(
+          grpcCode.INTERNAL,
+          `The volume ${this} was destroyed before it was created`,
+        );
+      }
     }
     let replicaSet = this._activeReplicas();
     let nexusNode = this._desiredNexusNode(replicaSet, replicaSet[0]?.pool?.node?.name);
@@ -753,8 +798,20 @@ export class Volume {
         `Some of the replicas for ${this} are not accessible from nexus`,
       );
     }
+    if (this.pendingDestroy) {
+      throw new GrpcError(
+        grpcCode.INTERNAL,
+        `The volume ${this} was destroyed before it was created`,
+      );
+    }
     if (!this.nexus) {
       await this._createNexus(nexusNode, replicaSet);
+      if (this.pendingDestroy) {
+        throw new GrpcError(
+          grpcCode.INTERNAL,
+          `The volume ${this} was destroyed before it was created`,
+        );
+      }
     }
     this.state = VolumeState.Unknown;
 
@@ -768,7 +825,7 @@ export class Volume {
   // registry.
   attach() {
     this.registry.getReplicaSet(this.uuid).forEach((r: Replica) => this.newReplica(r));
-    const nexus: Nexus = this.registry.getNexus(this.uuid);
+    const nexus = this.registry.getNexus(this.uuid);
     if (nexus) {
       this.newNexus(nexus);
     }
@@ -788,11 +845,20 @@ export class Volume {
         .map((r) => r.size)
         .reduce((acc, cur) => (cur < acc ? cur : acc), Number.MAX_SAFE_INTEGER);
     }
-    return node.createNexus(
-      this.uuid,
-      this.size,
-      Object.values(replicas)
-    );
+
+    // filter out unhealthy replicas (they don't have the latest data) from the create call
+    replicas = await this.registry.getPersistentStore().filterReplicas(this.uuid, replicas);
+
+    if (replicas.length == 0) {
+      // what could we really do in this case?
+      throw `No healthy children are available so nexus "${this.uuid}" creation is not allowed at this time`;
+    } else {
+      return node.createNexus(
+        this.uuid,
+        this.size,
+        Object.values(replicas)
+      );
+    }
   }
 
   // Adjust replica count for the volume to required count.
@@ -807,7 +873,7 @@ export class Volume {
     );
     // remove pools that are already used by existing replicas
     const usedNodes = Object.keys(this.replicas);
-    pools = pools.filter((p) => usedNodes.indexOf(p.node.name) < 0);
+    pools = pools.filter((p) => p.node && usedNodes.indexOf(p.node.name) < 0);
     if (pools.length < count) {
       log.error(
         `No suitable pool(s) for volume "${this}" with capacity ` +
@@ -834,7 +900,7 @@ export class Volume {
 
     // For local volumes, local pool should have the max priority.
     if (this.spec.local && this.spec.preferredNodes[0]) {
-      let idx = pools.findIndex((p) => p.node.name === this.spec.preferredNodes[0]);
+      let idx = pools.findIndex((p) => p.node && p.node.name === this.spec.preferredNodes[0]);
       if (idx >= 0) {
         let localPool = pools.splice(idx, 1)[0];
         pools.unshift(localPool);
@@ -885,7 +951,10 @@ export class Volume {
   //
   _scoreReplica(replica: Replica) {
     let score = 0;
-    const node = replica.pool!.node;
+    const node = replica.pool?.node;
+    if (!node) {
+      return 0;
+    }
 
     // The idea is that the sum of less important scores should never overrule
     // the more important criteria.
@@ -954,7 +1023,7 @@ export class Volume {
     }
     let nexusNode: Node | undefined;
     if (appNode) {
-      nexusNode = this.registry.getNode(appNode);
+      nexusNode = this.registry.getNode(appNode.toString());
     }
     if (!nexusNode && this.nexus) {
       nexusNode = this.nexus.node;
@@ -1093,7 +1162,12 @@ export class Volume {
   // @param replica   New replica object.
   newReplica(replica: Replica) {
     assert.strictEqual(replica.uuid, this.uuid);
-    const nodeName = replica.pool!.node.name;
+    const nodeName = replica.pool?.node?.name;
+    if (!nodeName) {
+      log.warn(
+        `Cannot add replica "${replica}" without a node to the volume`
+      );
+    }
     if (this.replicas[nodeName]) {
       log.warn(
         `Trying to add the same replica "${replica}" to the volume twice`
@@ -1111,7 +1185,12 @@ export class Volume {
   // @param replica   Modified replica object.
   modReplica(replica: Replica) {
     assert.strictEqual(replica.uuid, this.uuid);
-    const nodeName = replica.pool!.node.name;
+    const nodeName = replica.pool?.node?.name;
+    if (!nodeName) {
+      log.warn(
+        `Cannot update volume by replica "${replica}" without a node`
+      );
+    }
     if (!this.replicas[nodeName]) {
       log.warn(`Modified replica "${replica}" does not belong to the volume`);
     } else {
@@ -1127,7 +1206,12 @@ export class Volume {
   // @param replica   Deleted replica object.
   delReplica(replica: Replica) {
     assert.strictEqual(replica.uuid, this.uuid);
-    const nodeName = replica.pool!.node.name;
+    const nodeName = replica.pool?.node?.name;
+    if (!nodeName) {
+      log.warn(
+        `Cannot delete replica "${replica}" without a node from the volume`
+      );
+    }
     if (!this.replicas[nodeName]) {
       log.warn(`Deleted replica "${replica}" does not belong to the volume`);
     } else {

@@ -3,8 +3,9 @@
 import assert from 'assert';
 import * as _ from 'lodash';
 import { Replica } from './replica';
+import { Logger } from './logger';
 
-const log = require('./logger').Logger('pool');
+const log = Logger('pool');
 
 const URI_REGEX = /^([^:]+):\/\/(.+)$/;
 
@@ -129,6 +130,7 @@ export class Pool {
   //
   registerReplica(replica: Replica) {
     assert(!this.replicas.find((r) => r.uuid === replica.uuid));
+    assert(replica.realUuid !== undefined);
     this.replicas.push(replica);
     replica.bind(this);
   }

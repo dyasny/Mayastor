@@ -11,21 +11,23 @@ import * as path from 'path';
 import {
   ApiextensionsV1Api,
   KubeConfig,
-} from 'client-node-fixed-watcher';
+} from '@kubernetes/client-node';
 import {
   CustomResource,
   CustomResourceCache,
   CustomResourceMeta,
 } from './watcher';
+import { EventStream } from './event_stream';
 import { Workq } from './workq';
+import { Logger } from './logger';
+
+const log = Logger('node-operator');
 
 const yaml = require('js-yaml');
-const EventStream = require('./event_stream');
-const log = require('./logger').Logger('node-operator');
 
 const RESOURCE_NAME: string = 'mayastornode';
-const crdNode = yaml.safeLoad(
-  fs.readFileSync(path.join(__dirname, '/crds/mayastornode.yaml'), 'utf8')
+const crdNode = yaml.load(
+  fs.readFileSync(path.join(__dirname, '../crds/mayastornode.yaml'), 'utf8')
 );
 
 // State of a storage node.

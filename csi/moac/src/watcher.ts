@@ -12,9 +12,10 @@ import {
   ListWatch,
   V1ListMeta,
   Watch,
-} from 'client-node-fixed-watcher';
+} from '@kubernetes/client-node';
+import { Logger } from './logger';
 
-const log = require('./logger').Logger('watcher');
+const log = Logger('watcher');
 
 // If listWatch errors out then we restart it after this many msecs.
 const RESTART_DELAY: number = 3000;

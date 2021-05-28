@@ -7,24 +7,26 @@ import * as path from 'path';
 import {
   ApiextensionsV1Api,
   KubeConfig,
-} from 'client-node-fixed-watcher';
+} from '@kubernetes/client-node';
 import {
   CustomResource,
   CustomResourceCache,
   CustomResourceMeta,
 } from './watcher';
+import { EventStream } from './event_stream';
 import { Workq } from './workq';
+import { Logger } from './logger';
+
+const log = Logger('pool-operator');
 
 const yaml = require('js-yaml');
-const log = require('./logger').Logger('pool-operator');
-const EventStream = require('./event_stream');
 
 const RESOURCE_NAME: string = 'mayastorpool';
 const POOL_FINALIZER = 'finalizer.mayastor.openebs.io';
 
 // Load custom resource definition
-const crdPool = yaml.safeLoad(
-  fs.readFileSync(path.join(__dirname, '/crds/mayastorpool.yaml'), 'utf8')
+const crdPool = yaml.load(
+  fs.readFileSync(path.join(__dirname, '../crds/mayastorpool.yaml'), 'utf8')
 );
 
 // Set of possible pool states. Some of them come from mayastor and

@@ -5,9 +5,10 @@ import { grpcCode, GrpcError } from './grpc_client';
 import { Volume, VolumeSpec, VolumeState } from './volume';
 import { Workq } from './workq';
 import { VolumeStatus } from './volume_operator';
+import { EventStream } from './event_stream';
+import { Logger } from './logger';
 
-const EventStream = require('./event_stream');
-const log = require('./logger').Logger('volumes');
+const log = Logger('volumes');
 
 // Type used in "create volume" workq
 type CreateArgs = {
@@ -130,7 +131,17 @@ export class Volumes extends events.EventEmitter {
     }
     let volume = this.volumes[uuid];
     if (volume) {
-      volume.update(spec);
+      if (volume.isSpecUpdatable())
+        volume.update(spec);
+      else {
+        // note: if the volume is destroyed but still in the list, it may never get deleted again and so
+        // subsequent calls to create volume will keep failing.
+        log.error(`Failing createVolume for volume ${uuid} because its state is "${volume.state}"`);
+        throw new GrpcError(
+          grpcCode.UNAVAILABLE,
+          `Volume cannot be updated, its state is "${volume.state}"`
+        );
+      }
     } else {
       // The volume starts to exist before it is created because we must receive
       // events for it and we want to show to user that it is being created.
@@ -144,7 +155,8 @@ export class Volumes extends events.EventEmitter {
       try {
         await volume.create();
       } catch (err) {
-        // try to undo the pending state
+        // Undo the pending state and whatever has been created
+        volume.state = VolumeState.Unknown;
         try {
           this.destroyVolume(uuid);
         } catch (err) {

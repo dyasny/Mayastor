@@ -38,8 +38,6 @@
 //
 
 const yaml = require('js-yaml');
-const EventStream = require('./event_stream');
-const log = require('./logger').Logger('volume-operator');
 
 import assert from 'assert';
 import * as fs from 'fs';
@@ -48,20 +46,26 @@ import * as path from 'path';
 import {
   ApiextensionsV1Api,
   KubeConfig,
-} from 'client-node-fixed-watcher';
+} from '@kubernetes/client-node';
 import {
   CustomResource,
   CustomResourceCache,
   CustomResourceMeta,
 } from './watcher';
+import { EventStream } from './event_stream';
 import { protocolFromString } from './nexus';
+import { Replica } from './replica';
+import { Volume } from './volume';
 import { Volumes } from './volumes';
 import { VolumeSpec, VolumeState, volumeStateFromString } from './volume';
 import { Workq } from './workq';
+import { Logger } from './logger';
+
+const log = Logger('volume-operator');
 
 const RESOURCE_NAME: string = 'mayastorvolume';
-const crdVolume = yaml.safeLoad(
-  fs.readFileSync(path.join(__dirname, '/crds/mayastorvolume.yaml'), 'utf8')
+const crdVolume = yaml.load(
+  fs.readFileSync(path.join(__dirname, '../crds/mayastorvolume.yaml'), 'utf8')
 );
 // lower-case letters uuid pattern
 const uuidRegexp = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -129,14 +133,12 @@ export class VolumeResource extends CustomResource {
       this.status = <VolumeStatus> {
         size: status.size || 0,
         state: volumeStateFromString(status.state),
-        // sort the replicas according to uri to have deterministic order
-        replicas: [].concat(status.replicas || []).sort((a: any, b: any) => {
-          if (a.uri < b.uri) return -1;
-          else if (a.uri > b.uri) return 1;
-          else return 0;
-        }),
+        // sort the replicas according to node name to have deterministic order
+        replicas: []
+        .concat(status.replicas || [])
+        .sort((a: any, b: any) => a.node.localeCompare(b.node)),
       };
-      if (status.targetNodes) {
+      if (status.targetNodes && status.targetNodes.length > 0) {
         this.status.targetNodes = [].concat(status.targetNodes).sort();
       }
       if (status.nexus) {
@@ -256,34 +258,44 @@ export class VolumeOperator {
   // @param   volume   Volume object.
   // @returns Status properties.
   //
-  _volumeToStatus (volume: any): VolumeStatus {
+  _volumeToStatus (volume: Volume): VolumeStatus {
     const st: VolumeStatus = {
       size: volume.getSize(),
-      state: volumeStateFromString(volume.state),
-      replicas: Object.values(volume.replicas).map((r: any) => {
-        return {
-          node: r.pool.node.name,
-          pool: r.pool.name,
-          uri: r.uri,
-          offline: r.isOffline()
-        };
-      })
+      state: volume.state,
+      replicas: volume.getReplicas()
+        // ignore replicas that are being removed (disassociated from node)
+        .filter((r: Replica) => !!r.pool?.node)
+        .map((r: Replica) => {
+          return {
+            node: r.pool!.node!.name,
+            pool: r.pool!.name,
+            uri: r.uri,
+            offline: r.isOffline()
+          };
+        })
+        // enforce consistent order - important when comparing status objects
+        .sort((r1, r2) => r1.node.localeCompare(r2.node))
     };
-    if (volume.getNodeName()) {
-      st.targetNodes = [ volume.getNodeName() ];
+    const nodeName = volume.getNodeName();
+    if (nodeName) {
+      // NOTE: sort it when we have more than just one entry
+      st.targetNodes = [ nodeName ];
     }
-    if (volume.nexus) {
+    const nexus = volume.getNexus();
+    if (nexus && nexus.node) {
       st.nexus = {
-        node: volume.nexus.node.name,
-        deviceUri: volume.nexus.deviceUri || '',
-        state: volume.nexus.state,
-        children: volume.nexus.children.map((ch: any) => {
+        node: nexus.node.name,
+        state: nexus.state,
+        children: nexus.children.map((ch: any) => {
           return {
             uri: ch.uri,
             state: ch.state
           };
         })
       };
+      if (nexus.deviceUri) {
+        st.nexus.deviceUri = nexus.deviceUri;
+      }
     }
     return st;
   }
@@ -421,8 +433,13 @@ export class VolumeOperator {
       // most likely it was not user but us (the operator) who deleted
       // the resource. So check if it really exists first.
       const name = obj.metadata.name!;
-      if (this.volumes.get(name)) {
-        this.workq.push(name, this._destroyVolume.bind(this));
+      const volume = this.volumes.get(name);
+      if (volume) {
+        if (volume.state !== VolumeState.Destroyed) {
+          this.workq.push(name, this._destroyVolume.bind(this));
+        } else {
+          log.warn(`Destruction of volume "${name}" is already in progress`);
+        }
       }
     });
   }
