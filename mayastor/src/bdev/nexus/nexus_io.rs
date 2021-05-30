@@ -217,8 +217,8 @@ impl NexusBio {
         if self.ctx().in_flight == 0 {
             if self.ctx().must_fail {
                 //warn!(?self, "resubmitted due to must_fail");
-                //self.retry_checked();
-                self.fail();
+                self.retry_checked();
+                //self.fail();
             } else {
                 self.ok();
             }
@@ -244,7 +244,7 @@ impl NexusBio {
             info!(?self, "resubmitting IO");
             nexus_submit_io(bio);
         } else {
-            self.fail();
+            // self.fail();
             // we can not resubmit the IO now as there is an IO in flight
             // the retry operation may be retried at a later stage.
             error!(?self, "resubmitted with inflight IO's, nvmf dnr?");
@@ -470,6 +470,8 @@ impl NexusBio {
             // been submitted successfully prior to the error condition.
             self.ctx_as_mut().in_flight = inflight;
             self.ctx_as_mut().status = IoStatus::Success;
+            self.ok_checked();
+            return result;
         }
 
         self.fail_checked();
