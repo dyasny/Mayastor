@@ -496,6 +496,7 @@ fn evict_child_cb(
         });
         channel.write_queue.clear();
     }
+    channel.queue_failures = false;
     0
 }
 

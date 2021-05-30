@@ -12,7 +12,7 @@ use crate::{
     bdev::{
         nexus::{
             nexus_bdev::NEXUS_PRODUCT_ID,
-            nexus_channel::{NexusChannel, NexusChannelInner},
+            nexus_channel::{DrEvent, NexusChannel, NexusChannelInner},
             nexus_persistence::PersistOp,
         },
         nexus_lookup,
@@ -220,17 +220,33 @@ impl NexusBio {
                     //self.retry_checked();
                     // self.fail();
                 }
-                self.fail();
+                //self.fail();
+                self.deferred_fail();
             } else {
                 self.ok();
             }
         }
     }
 
+    pub fn deferred_fail(&mut self) {
+        trace!(
+            "(core: {} thread: {}): stashing bio {:p} for deferred completion, writers={}",
+            Cores::current(), Mthread::current().unwrap().name(),self.as_ptr(),
+            self.inner_channel().writers.len(),
+        );
+        if !self.inner_channel().writers.is_empty()
+            && self.inner_channel().queue_failures
+        {
+            self.inner_channel().write_queue.push(self.as_ptr());
+        } else {
+            self.fail();
+        }
+    }
+
     /// Complete the IO marking it as failed.
     pub fn fail_checked(&mut self) {
         if self.ctx().in_flight == 0 {
-            self.fail();
+            self.deferred_fail();
         }
     }
 
@@ -317,7 +333,7 @@ impl NexusBio {
                     self.do_retire(device);
                 }
 
-                self.fail();
+                self.deferred_fail();
             } else {
                 self.ctx_as_mut().in_flight = 1;
             }
@@ -484,16 +500,7 @@ impl NexusBio {
             // Defer bio completion if there are active writers and let the bio
             // handled as part of nexus child eviction, or fail it
             // immediately otherwise.
-            if !self.inner_channel().writers.is_empty() {
-                trace!(
-                    "(core: {} thread: {}): stashing bio {:p} for deferred completion, writers={}",
-                    Cores::current(), Mthread::current().unwrap().name(),self.as_ptr(),
-                    self.inner_channel().writers.len(),
-                );
-                self.inner_channel().write_queue.push(self.as_ptr());
-            } else {
-                self.fail();
-            }
+            self.deferred_fail();
         }
 
         result
@@ -641,7 +648,7 @@ impl NexusBio {
                                     );
                             }
                         }
-
+                        nexus.reconfigure(DrEvent::ChildFault).await;
                         nexus.resume().await.unwrap();
                         PAUSED.fetch_min(1, Ordering::SeqCst);
 

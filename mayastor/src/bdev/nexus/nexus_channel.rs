@@ -35,6 +35,7 @@ pub(crate) struct NexusChannelInner {
     pub(crate) fail_fast: u32,
     pub(crate) write_queue: Vec<*mut spdk_bdev_io>,
     pub(crate) write_freeze: bool,
+    pub(crate) queue_failures: bool,
     device: *mut c_void,
 }
 
@@ -187,6 +188,7 @@ impl NexusChannelInner {
         self.writers.clear();
         self.readers.clear();
         self.previous = 0;
+        self.queue_failures = true;
 
         // iterate over all our children which are in the open state
         nexus
@@ -220,7 +222,7 @@ impl NexusChannelInner {
                 });
         }
 
-        trace!(
+        error!(
             "{}: New number of IO channels write:{} read:{} out of {} children",
             nexus.name,
             self.writers.len(),
@@ -246,6 +248,7 @@ impl NexusChannel {
             writers: Vec::new(),
             readers: Vec::new(),
             write_queue: Vec::new(),
+            queue_failures: true,
             previous: 0,
             device,
             fail_fast: 0,
