@@ -459,10 +459,9 @@ impl NexusBio {
             let device = failed_device.unwrap();
             // set the IO as failed in the submission stage.
             self.ctx_as_mut().must_fail = true;
-            let _ = self.inner_channel().remove_child(&device);
-            // if must_retire {
-            //    self.do_retire(device);
-            // }
+            if self.inner_channel().remove_child(&device) {
+                self.do_retire(device);
+            }
         }
 
         // partial submission

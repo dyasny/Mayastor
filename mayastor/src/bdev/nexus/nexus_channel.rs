@@ -133,7 +133,7 @@ impl NexusChannelInner {
             self.readers.len(),
             nexus.children.len()
         );
-        true
+        self.fault_child(name)
     }
 
     /// Fault the child by marking its status.
