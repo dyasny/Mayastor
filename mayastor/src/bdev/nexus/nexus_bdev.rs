@@ -11,12 +11,11 @@ use std::{
     ptr::NonNull,
 };
 
-use futures::{channel::oneshot, future::join_all};
+use futures::{channel::oneshot, future::join_all, FutureExt};
 use nix::errno::Errno;
 use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
-use futures::FutureExt;
 
 use crate::core::IoDevice;
 
@@ -34,11 +33,17 @@ use crate::{
                 NexusChannelInner,
                 ReconfigureCtx,
             },
-            nexus_child::{ChildError, ChildState, NexusChild},
+            nexus_child::{
+                ChildError,
+                ChildState,
+                ChildState::Faulted,
+                NexusChild,
+            },
             nexus_label::LabelError,
             nexus_nbd::{NbdDisk, NbdError},
             nexus_persistence::{NexusInfo, PersistOp},
         },
+        Reason,
     },
     core::{Bdev, CoreError, Cores, IoType, Protocol, Reactor, Share},
     ffihelper::errno_result_from_i32,
@@ -47,8 +52,6 @@ use crate::{
     subsys::{NvmfError, NvmfSubsystem},
 };
 use crossbeam::atomic::AtomicCell;
-use crate::bdev::nexus::nexus_child::ChildState::Faulted;
-use crate::bdev::Reason;
 
 /// Obtain the full error chain
 pub trait VerboseError {
@@ -249,7 +252,10 @@ pub enum Error {
     #[snafu(display("NVMf subsystem error: {}", e))]
     SubsysNvmfError { e: String },
     #[snafu(display("failed to pause {} current state {:?}", name, state))]
-    PauseError { state: NexusPauseState, name: String}
+    PauseError {
+        state: NexusPauseState,
+        name: String,
+    },
 }
 
 impl From<NvmfError> for Error {
@@ -425,8 +431,7 @@ fn update_failfast_cb(
     channel: &mut NexusChannelInner,
     ctx: &mut UpdateFailFastCtx,
 ) -> i32 {
-
-    ctx.child.as_ref().map(|child | { channel.remove_child(child)});
+    ctx.child.as_ref().map(|child| channel.remove_child(child));
     0
 }
 
@@ -743,7 +748,7 @@ impl Nexus {
     /// with the nexus paused once they are awakened via resume().
     /// Note: in order to handle concurrent pauses properly, this function must
     /// be called only from the master core.
-    pub async fn pause(&self) -> Result<(), Error> {
+    pub async fn pause(&mut self) -> Result<(), Error> {
         assert_eq!(Cores::current(), Cores::first());
 
         let state = self
@@ -751,12 +756,16 @@ impl Nexus {
             .compare_exchange(
                 NexusPauseState::Unpaused,
                 NexusPauseState::Pausing,
-            ).map_err(|e| Error::PauseError { state: e, name: self.name.clone() })?;
+            )
+            .map_err(|e| Error::PauseError {
+                state: e,
+                name: self.name.clone(),
+            })?;
 
         match state {
             // Pause nexus if it is in the unpaused state.
-            NexusPauseState::Pausing => {
-                info!("{} pausing nexus", self.name);
+            NexusPauseState::Unpaused => {
+                info!("=========================={} pausing nexus", self.name);
                 if let Some(Protocol::Nvmf) = self.shared() {
                     if let Some(subsystem) =
                         NvmfSubsystem::nqn_lookup(&self.name)
@@ -789,7 +798,7 @@ impl Nexus {
                 );
 
                 let (s, r) = oneshot::channel::<i32>();
-
+                self.pause_waiters.push(s);
                 r.await.expect("Nexus pause sender disappeared");
                 info!("{} pause is granted", self.name,);
                 assert_eq!(self.pause_state.load(), NexusPauseState::Paused);
@@ -803,7 +812,11 @@ impl Nexus {
     // for the child.
 
     #[allow(dead_code)]
-    async fn update_failfast(&self, increment: bool, child: Option<String>) -> Result<(), Error> {
+    async fn update_failfast(
+        &self,
+        increment: bool,
+        child: Option<String>,
+    ) -> Result<(), Error> {
         let (sender, r) = oneshot::channel::<bool>();
 
         let ctx = UpdateFailFastCtx {
@@ -828,7 +841,10 @@ impl Nexus {
         Ok(())
     }
 
-    async fn child_retire_for_each_channel(&self, child: Option<String>) -> Result<(), Error> {
+    async fn child_retire_for_each_channel(
+        &self,
+        child: Option<String>,
+    ) -> Result<(), Error> {
         let (sender, r) = oneshot::channel::<bool>();
 
         let ctx = UpdateFailFastCtx {
@@ -839,29 +855,31 @@ impl Nexus {
         };
 
         if let Some(io_device) = self.io_device.as_ref() {
-        io_device.traverse_io_channels(
-            update_failfast_cb,
-            update_failfast_done,
-            NexusChannel::inner_from_channel,
-            ctx,
+            io_device.traverse_io_channels(
+                update_failfast_cb,
+                update_failfast_done,
+                NexusChannel::inner_from_channel,
+                ctx,
             );
 
             info!(?self, "all channels retired");
-            r.await.map_err(|e| error!("update failfast sender already dropped"));
+            r.await
+                .map_err(|e| error!("update failfast sender already dropped"));
         }
 
         Ok(())
     }
 
     pub async fn child_retire(&mut self, name: String) -> Result<(), Error> {
+        error!("Before Pause");
+        self.pause().await?;
+        error!("After Pause");
+        self.child_retire_for_each_channel(Some(name.clone()))
+            .await?;
         if let Some(child) = self.child_lookup(&name) {
-            self.child_retire_for_each_channel(Some(name.clone())).await?;
-            self.pause().await?;
             self.persist(PersistOp::Update((name, child.state()))).await;
-            self.resume().await
-        } else {
-            Ok(())
         }
+        self.resume().await
     }
 
     #[allow(dead_code)]
@@ -996,7 +1014,7 @@ impl Nexus {
         match *self.state.lock() {
             NexusState::Init => NexusStatus::Degraded,
             NexusState::Closed => NexusStatus::Faulted,
-            NexusState::Open | NexusState::Reconfiguring =>  {
+            NexusState::Open | NexusState::Reconfiguring => {
                 if self
                     .children
                     .iter()

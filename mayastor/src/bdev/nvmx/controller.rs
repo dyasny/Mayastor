@@ -355,6 +355,10 @@ impl<'a> NvmeController<'a> {
         Ok(())
     }
 
+    // after the shutdown we call nvme_detach() which will disconnect/free the
+    // qpairs. as we drop our qpairs during channel destruction, we should
+    // not call it here
+
     fn _shutdown_channels(
         channel: &mut NvmeIoChannelInner,
         ctx: &mut ShutdownCtx,
@@ -404,7 +408,7 @@ impl<'a> NvmeController<'a> {
         // if rc != 0 {
         //     error!("{} failed to reset controller, rc = {}", ctx.name, rc);
         // }
-       // unsafe { spdk_nvme_ctrlr_fail(controller.ctrlr_as_ptr()) };
+        // unsafe { spdk_nvme_ctrlr_fail(controller.ctrlr_as_ptr()) };
 
         // Finalize controller shutdown and invoke callback.
         controller.clear_namespaces();

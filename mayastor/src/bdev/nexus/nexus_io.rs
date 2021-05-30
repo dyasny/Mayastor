@@ -198,12 +198,12 @@ impl NexusBio {
             self.ok_checked();
         } else {
             // IO failure, mark the IO failed and take the child out
-            error!(
-                ?self,
-                "{} IO completion failed: {:?}",
-                child.device_name(),
-                self.ctx()
-            );
+            //error!(
+            //    ?self,
+            //    "{} IO completion failed: {:?}",
+            //    child.device_name(),
+            //    self.ctx()
+            //);
             self.ctx_as_mut().status = IoStatus::Failed;
             self.ctx_as_mut().must_fail = true;
             self.handle_failure(child, status);
@@ -216,7 +216,7 @@ impl NexusBio {
     fn ok_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             if self.ctx().must_fail {
-                warn!(?self, "resubmitted due to must_fail");
+                //warn!(?self, "resubmitted due to must_fail");
                 //self.retry_checked();
                 self.fail();
             } else {
@@ -459,11 +459,10 @@ impl NexusBio {
             let device = failed_device.unwrap();
             // set the IO as failed in the submission stage.
             self.ctx_as_mut().must_fail = true;
-            let must_retire =
-                self.inner_channel().fault_child(&device);
-            if must_retire {
-                self.do_retire(device);
-            }
+            let _ = self.inner_channel().remove_child(&device);
+            // if must_retire {
+            //    self.do_retire(device);
+            // }
         }
 
         // partial submission
@@ -512,7 +511,7 @@ impl NexusBio {
         // outstanding IO to complete, the IO's to that child must be aborted.
         // The abortion is implicit when removing the device.
 
-       // error!(?status);
+        // error!(?status);
 
         if matches!(
             status,
@@ -550,29 +549,28 @@ impl NexusBio {
             self.do_retire(child);
         }
 
-        // if retry {
-        //     return self.ok_checked();
-        // }
+        if retry {
+            return self.ok_checked();
+        }
 
         self.fail_checked();
     }
 
     /// Retire a child for this nexus.
     async fn child_retire(nexus: String, device: String) {
-        if let Some(nexus)  = nexus_lookup(&nexus) {
-                warn!(
-                    "nexus: {} core: {}, thread {:?}, faulting child {}",
-                    nexus,
-                    Cores::current(),
-                    Mthread::current(),
-                    device,
-                );
+        if let Some(nexus) = nexus_lookup(&nexus) {
+            warn!(
+                "nexus: {} core: {}, thread {:?}, faulting child {}",
+                nexus,
+                Cores::current(),
+                Mthread::current(),
+                device,
+            );
 
             dbg!(nexus.child_retire(device).await);
             if matches!(nexus.status(), NexusStatus::Faulted) {
                 error!(?nexus, "no children left");
             }
-
-            }
         }
+    }
 }
