@@ -871,11 +871,11 @@ impl Nexus {
     }
 
     pub async fn child_retire(&mut self, name: String) -> Result<(), Error> {
+        self.child_retire_for_each_channel(Some(name.clone()))
+            .await?;
         error!("Before Pause");
         self.pause().await?;
         error!("After Pause");
-        self.child_retire_for_each_channel(Some(name.clone()))
-            .await?;
         if let Some(child) = self.child_lookup(&name) {
             self.persist(PersistOp::Update((name, child.state()))).await;
         }
