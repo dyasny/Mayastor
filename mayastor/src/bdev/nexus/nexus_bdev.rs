@@ -34,12 +34,13 @@ use crate::{
                 ReconfigureCtx,
             },
             nexus_child::{ChildError, ChildState, NexusChild},
+            nexus_io::NexusBio,
             nexus_label::LabelError,
             nexus_nbd::{NbdDisk, NbdError},
             nexus_persistence::{NexusInfo, PersistOp},
         },
     },
-    core::{Bdev, CoreError, Cores, IoType, Protocol, Reactor, Share},
+    core::{Bdev, CoreError, Cores, IoType, Mthread, Protocol, Reactor, Share},
     ffihelper::errno_result_from_i32,
     nexus_uri::{bdev_destroy, NexusBdevError},
     rebuild::RebuildError,
@@ -447,6 +448,61 @@ fn update_failfast_done(status: i32, ctx: UpdateFailFastCtx) {
 
     ctx.sender.send(true).expect("Receiver disappeared");
 }
+struct EvictChildCtx {
+    name: String,
+    sender: oneshot::Sender<bool>,
+}
+
+fn evict_child_cb(
+    channel: &mut NexusChannelInner,
+    ctx: &mut EvictChildCtx,
+) -> i32 {
+    // Close I/O handle to cancel all active I/O for target device.
+    [&mut channel.readers, &mut channel.writers]
+        .iter_mut()
+        .for_each(|c| {
+            c.retain(|h| {
+                let keep = h.get_device().device_name() != ctx.name;
+                if !keep {
+                    trace!(
+                        "({}: {}) Removing replica {}",
+                        Cores::current(),
+                        Mthread::current().unwrap().name(),
+                        ctx.name
+                    );
+                    let e = h.close();
+                    if e.is_err() {
+                        error!(
+                            "{} failed to close device handle: {:?}",
+                            ctx.name, e,
+                        );
+                    }
+                }
+                keep
+            });
+        });
+
+    if !channel.write_queue.is_empty() {
+        trace!(
+            "({}: {}) Completing deferred writes: {} IOs to complete",
+            Cores::current(),
+            Mthread::current().unwrap().name(),
+            channel.write_queue.len(),
+        );
+
+        channel.write_queue.iter().for_each(|i| {
+            let bio = NexusBio::from(*i);
+            bio.fail();
+        });
+        channel.write_queue.clear();
+    }
+    0
+}
+
+fn evict_child_done(status: i32, ctx: EvictChildCtx) {
+    info!("{}: child eviction complete, status={}", ctx.name, status);
+    ctx.sender.send(true).expect("Receiver disappeared");
+}
 
 impl Nexus {
     /// create a new nexus instance with optionally directly attaching
@@ -541,6 +597,29 @@ impl Nexus {
     /// returns the size in bytes of the nexus instance
     pub fn size(&self) -> u64 {
         u64::from(self.bdev.block_len()) * self.bdev.num_blocks()
+    }
+
+    /// Removes replica from nexus I/O path.
+    pub async fn evict_replica(&self, child: String) {
+        let (sender, r) = oneshot::channel::<bool>();
+        let io_device = self.io_device.as_ref().expect("Nexus not opened");
+
+        info!("{} evicting child {} from I/O path", self.name, child);
+
+        let ctx = EvictChildCtx {
+            sender,
+            name: child.clone(),
+        };
+
+        io_device.traverse_io_channels(
+            evict_child_cb,
+            evict_child_done,
+            NexusChannel::inner_from_channel,
+            ctx,
+        );
+
+        r.await.expect("update failfast sender already dropped");
+        info!("{} child {} removed from I/O path", self.name, child);
     }
 
     /// reconfigure the child event handler

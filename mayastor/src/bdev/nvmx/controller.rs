@@ -396,13 +396,14 @@ impl<'a> NvmeController<'a> {
         // TODO: fail the controller via spdk_nvme_ctrlr_fail() upon shutdown ?
         //debug!("{} resetting NVMe controller", ctx.name);
         debug!("{} resetting NVMe controller", ctx.name);
-        //unsafe {
-        //    (*controller.ctrlr_as_ptr()).reinit_after_reset = false;
-        //}
-        let rc = unsafe { spdk_nvme_ctrlr_reset(controller.ctrlr_as_ptr()) };
-        if rc != 0 {
-            error!("{} failed to reset controller, rc = {}", ctx.name, rc);
-        }
+        // unsafe {
+        //     (*controller.ctrlr_as_ptr()).reinit_after_reset = false;
+        // }
+        // let rc = unsafe { spdk_nvme_ctrlr_reset(controller.ctrlr_as_ptr()) };
+        // if rc != 0 {
+        //     error!("{} failed to reset controller, rc = {}", ctx.name, rc);
+        // }
+        unsafe { spdk_nvme_ctrlr_fail(controller.ctrlr_as_ptr()) };
 
         // Finalize controller shutdown and invoke callback.
         controller.clear_namespaces();
@@ -802,7 +803,8 @@ pub extern "C" fn nvme_poll_adminq(ctx: *mut c_void) -> i32 {
     let rc =
         unsafe { spdk_nvme_ctrlr_process_admin_completions(context.ctrlr) };
     if rc < 0 {
-        context.reset_controller();
+        //tracing::error!("Would call reset_controller here!");
+        //context.reset_controller();
     }
 
     if rc == 0 {

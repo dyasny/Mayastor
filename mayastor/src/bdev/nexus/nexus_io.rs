@@ -12,7 +12,7 @@ use crate::{
     bdev::{
         nexus::{
             nexus_bdev::NEXUS_PRODUCT_ID,
-            nexus_channel::{DrEvent, NexusChannel, NexusChannelInner},
+            nexus_channel::{NexusChannel, NexusChannelInner},
             nexus_persistence::PersistOp,
         },
         nexus_lookup,
@@ -23,7 +23,6 @@ use crate::{
         Bio,
         BlockDevice,
         BlockDeviceHandle,
-        Command,
         CoreError,
         Cores,
         GenericStatusCode,
@@ -33,7 +32,6 @@ use crate::{
         Mthread,
         NvmeCommandStatus,
         Reactors,
-        DEAD_LIST,
         PAUSED,
         PAUSING,
     },
@@ -109,7 +107,7 @@ pub struct NioCtx {
 }
 
 pub(crate) fn nexus_submit_io(mut io: NexusBio) {
-    if let Err(e) = match io.cmd() {
+    if let Err(_e) = match io.cmd() {
         IoType::Read => io.readv(),
         // these IOs are submitted to all the underlying children
         IoType::Write | IoType::WriteZeros | IoType::Reset | IoType::Unmap => {
@@ -199,7 +197,9 @@ impl NexusBio {
             // IO failure, mark the IO failed and take the child out
             error!(
                 ?self,
-                "{} IO completion failed: {:?}",
+                "({}: {:?}) {} IO completion failed: {:?}",
+                Cores::current(),
+                Mthread::current(),
                 child.device_name(),
                 self.ctx()
             );
@@ -217,10 +217,10 @@ impl NexusBio {
             if self.ctx().must_fail {
                 if self.inner_channel().writers.len() > 1 {
                     warn!(?self, "resubmitted due to must_fail");
-                    self.retry_checked();
-                } else {
-                    self.fail();
+                    //self.retry_checked();
+                    // self.fail();
                 }
+                self.fail();
             } else {
                 self.ok();
             }
@@ -235,6 +235,7 @@ impl NexusBio {
     }
 
     /// retry this IO
+    /*
     pub fn retry_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             let bio = unsafe {
@@ -251,6 +252,7 @@ impl NexusBio {
             error!(?self, "resubmitted with inflight IO's");
         }
     }
+    */
 
     /// reference to the inner channels. The inner channel contains the specific
     /// per-core data structures.
@@ -437,8 +439,10 @@ impl NexusBio {
             })
             .map_err(|se| {
                 error!(
-                    "(core: {} thread: {}): IO submission failed with error {:?}, I/Os submitted: {}",
-                    Cores::current(), Mthread::current().unwrap().name(), se, inflight
+                    "(core: {} thread: {}): {} IO submission failed with error {:?}, I/Os submitted: {}",
+                    Cores::current(), Mthread::current().unwrap().name(),
+                    h.get_device().device_name(),
+                    se, inflight
                 );
 
                 // Record the name of the device for immediate retire.
@@ -463,7 +467,10 @@ impl NexusBio {
             let must_retire =
                 self.inner_channel().remove_child_in_submit(&device);
             if must_retire {
+                info!("{} retiring the device", device);
                 self.do_retire(device);
+            } else {
+                info!("{} NOT RETIRING the device", device);
             }
         }
 
@@ -473,9 +480,21 @@ impl NexusBio {
             // been submitted successfully prior to the error condition.
             self.ctx_as_mut().in_flight = inflight;
             self.ctx_as_mut().status = IoStatus::Success;
+        } else {
+            // Defer bio completion if there are active writers and let the bio
+            // handled as part of nexus child eviction, or fail it
+            // immediately otherwise.
+            if !self.inner_channel().writers.is_empty() {
+                trace!(
+                    "(core: {} thread: {}): stashing bio {:p} for deferred completion, writers={}",
+                    Cores::current(), Mthread::current().unwrap().name(),self.as_ptr(),
+                    self.inner_channel().writers.len(),
+                );
+                self.inner_channel().write_queue.push(self.as_ptr());
+            } else {
+                self.fail();
+            }
         }
-
-        self.fail_checked();
 
         result
     }
@@ -538,7 +557,16 @@ impl NexusBio {
         // The child state was not faulted yet, so this is the first IO
         // to this child for which we encountered an error.
         if needs_retire {
+            info!(
+                "{} retiring child in response to IO completion failure",
+                child
+            );
             self.do_retire(child);
+        } else {
+            info!(
+                "{} NOT RETIRING child in response to IO completion failure",
+                child
+            );
         }
 
         self.fail_checked();
@@ -552,7 +580,7 @@ impl NexusBio {
                     "nexus: {} core: {}, thread {:?}, faulting child {}",
                     nexus,
                     Cores::current(),
-                    Mthread::current(),
+                    Mthread::current().unwrap().name(),
                     device,
                 );
 
@@ -570,7 +598,19 @@ impl NexusBio {
                         // inconsistency in reading/updating nexus
                         // configuration.
                         PAUSING.fetch_add(1, Ordering::SeqCst);
+                        tracing::info!("Before Reconfigure");
+                        //nexus.reconfigure(DrEvent::ChildFault).await;
+                        nexus
+                            .evict_replica(
+                                child
+                                    .get_device()
+                                    .expect("Replica device disappeared")
+                                    .device_name(),
+                            )
+                            .await;
+                        tracing::info!("Before Pause");
                         nexus.pause().await.unwrap();
+                        tracing::info!("After Pause");
                         PAUSED.fetch_add(1, Ordering::SeqCst);
                         PAUSING.fetch_min(1, Ordering::SeqCst);
 
@@ -587,12 +627,12 @@ impl NexusBio {
                                 // separate task,
                                 // e.g. grpc request is also deleting the
                                 // child.
-                                //if let Err(err) = child.destroy().await {
-                                //    error!(
-                                //        "{}: destroying child {} failed {}",
-                                //        nexus, child, err
-                                //    );
-                                //}
+                                if let Err(err) = child.destroy().await {
+                                    error!(
+                                        "{}: destroying child {} failed {}",
+                                        nexus, child, err
+                                    );
+                                }
                             }
                             None => {
                                 warn!(
@@ -619,6 +659,7 @@ impl NexusBio {
         }
     }
 
+    /*
     async fn child_retire2(nexus: String, device: String) {
         if let Some(n) = nexus_lookup(&nexus) {
             warn!(
@@ -638,4 +679,5 @@ impl NexusBio {
             }
         }
     }
+    */
 }

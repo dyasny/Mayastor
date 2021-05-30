@@ -174,7 +174,7 @@ impl Debug for NexusChild {
 impl Display for NexusChild {
     fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
         match &self.device {
-            Some(dev) => writeln!(f, "{}: {:?}", self.name, self.state(),),
+            Some(_dev) => writeln!(f, "{}: {:?}", self.name, self.state(),),
             None => writeln!(f, "{}: state {:?}", self.name, self.state()),
         }
     }
@@ -443,7 +443,6 @@ impl NexusChild {
             // Block device is being removed, so ensure we don't use it again.
             self.device = None;
             destroying = true;
-
             state = self.prev_state.load();
         }
         match state {

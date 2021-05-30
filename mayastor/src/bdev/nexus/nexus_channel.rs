@@ -5,6 +5,7 @@ use std::{ffi::c_void, fmt::Debug, ptr::NonNull};
 use futures::channel::oneshot;
 
 use spdk_sys::{
+    spdk_bdev_io,
     spdk_for_each_channel,
     spdk_for_each_channel_continue,
     spdk_io_channel,
@@ -16,10 +17,8 @@ use spdk_sys::{
 
 use crate::{
     bdev::{nexus::nexus_child::ChildState, Nexus, Reason},
-    core::{BlockDeviceHandle, Cores, Mthread},
+    core::{BlockDeviceHandle, Mthread},
 };
-
-use super::nexus_io::NexusBio;
 
 /// io channel, per core
 #[repr(C)]
@@ -34,7 +33,7 @@ pub(crate) struct NexusChannelInner {
     pub(crate) readers: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) previous: usize,
     pub(crate) fail_fast: u32,
-    pub(crate) write_queue: Vec<NexusBio>,
+    pub(crate) write_queue: Vec<*mut spdk_bdev_io>,
     pub(crate) write_freeze: bool,
     device: *mut c_void,
 }
@@ -107,32 +106,32 @@ impl NexusChannelInner {
 
     /// Remove a child from the readers and/or writers
     pub fn remove_child_in_submit(&mut self, name: &str) -> bool {
-        self.previous = 0;
-        let nexus = unsafe { Nexus::from_raw(self.device) };
-        trace!(
-            ?name,
-            "core: {} thread: {} removing from during submission channels",
-            Cores::current(),
-            Mthread::current().unwrap().name()
-        );
-        trace!(
-            "{}: Current number of IO channels write: {} read: {}",
-            nexus.name,
-            self.writers.len(),
-            self.readers.len(),
-        );
-        self.readers
-            .retain(|c| c.get_device().device_name() != name);
-        self.writers
-            .retain(|c| c.get_device().device_name() != name);
-
-        trace!(
-            "{}: New number of IO channels write:{} read:{} out of {} children",
-            nexus.name,
-            self.writers.len(),
-            self.readers.len(),
-            nexus.children.len()
-        );
+        // self.previous = 0;
+        // let nexus = unsafe { Nexus::from_raw(self.device) };
+        // trace!(
+        //     ?name,
+        //     "core: {} thread: {} removing from during submission channels",
+        //     Cores::current(),
+        //     Mthread::current().unwrap().name()
+        // );
+        // trace!(
+        //     "{}: Current number of IO channels write: {} read: {}",
+        //     nexus.name,
+        //     self.writers.len(),
+        //     self.readers.len(),
+        // );
+        // self.readers
+        //     .retain(|c| c.get_device().device_name() != name);
+        // self.writers
+        //     .retain(|c| c.get_device().device_name() != name);
+        //
+        // trace!(
+        //     "{}: New number of IO channels write:{} read:{} out of {}
+        // children",     nexus.name,
+        //     self.writers.len(),
+        //     self.readers.len(),
+        //     nexus.children.len()
+        // );
         self.fault_child(name)
     }
 

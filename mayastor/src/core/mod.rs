@@ -206,7 +206,7 @@ pub enum IoCompletionStatus {
     NvmeError(NvmeCommandStatus),
 }
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 
 pub static PAUSING: AtomicUsize = AtomicUsize::new(0);
 pub static PAUSED: AtomicUsize = AtomicUsize::new(0);
@@ -219,4 +219,4 @@ pub enum Command {
 
 pub static DEAD_LIST: once_cell::sync::Lazy<
     crossbeam::queue::SegQueue<Command>,
-> = once_cell::sync::Lazy::new(|| crossbeam::queue::SegQueue::new());
+> = once_cell::sync::Lazy::new(crossbeam::queue::SegQueue::new);

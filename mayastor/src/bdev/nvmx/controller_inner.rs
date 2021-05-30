@@ -3,7 +3,7 @@ use std::{
     ops::{Deref, DerefMut},
     os::raw::c_void,
     ptr::NonNull,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use crossbeam::atomic::AtomicCell;
@@ -62,7 +62,7 @@ const MAX_RESET_ATTEMPTS: u32 = 1;
 
 /// Time to wait till reset attempts can be recharged to maximum
 /// after all current reset attempts have been used.
-const RESET_COOLDOWN_INTERVAL: Duration = Duration::from_secs(30);
+// const RESET_COOLDOWN_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) struct TimeoutConfig {
     pub name: String,
@@ -100,6 +100,7 @@ impl TimeoutConfig {
         }
     }
 
+    /*
     fn reset_cb(success: bool, ctx: *mut c_void) {
         let timeout_ctx = TimeoutConfig::from_ptr(ctx as *mut TimeoutConfig);
 
@@ -136,6 +137,7 @@ impl TimeoutConfig {
             "non-exclusive access to controller reset flag"
         );
     }
+    */
 
     /// Resets controller exclusively, taking into account existing active
     /// resets related to I/O timeout.

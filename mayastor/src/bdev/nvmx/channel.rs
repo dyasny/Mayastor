@@ -7,7 +7,6 @@ use spdk_sys::{
     spdk_io_channel,
     spdk_nvme_ctrlr_alloc_io_qpair,
     spdk_nvme_ctrlr_connect_io_qpair,
-    spdk_nvme_ctrlr_disconnect_io_qpair,
     spdk_nvme_ctrlr_free_io_qpair,
     spdk_nvme_ctrlr_get_default_io_qpair_opts,
     spdk_nvme_io_qpair_opts,
@@ -175,7 +174,10 @@ impl PollGroup {
 impl Drop for PollGroup {
     fn drop(&mut self) {
         debug!("dropping poll group {:p}", self.0.as_ptr());
-        unsafe { spdk_nvme_poll_group_destroy(self.0.as_ptr()) };
+        let rc = unsafe { spdk_nvme_poll_group_destroy(self.0.as_ptr()) };
+        if rc < 0 {
+            error!("Error on poll group destroy: {}", rc);
+        }
         debug!("poll group {:p} successfully dropped", self.0.as_ptr());
     }
 }
@@ -188,18 +190,18 @@ impl Drop for IoQpair {
         unsafe {
             nvme_qpair_abort_reqs(qpair, 1);
             debug!(?qpair, "I/O requests successfully aborted,");
-            spdk_nvme_ctrlr_disconnect_io_qpair(qpair);
+            // spdk_nvme_ctrlr_disconnect_io_qpair(qpair);
             debug!(?qpair, "qpair successfully disconnected,");
             spdk_nvme_ctrlr_free_io_qpair(qpair);
         }
-        debug!(?qpair, "qpair successfully dropped,");
+        info!(?qpair, "qpair successfully dropped,");
     }
 }
 
 pub struct NvmeIoChannelInner<'a> {
+    pub qpair: Option<IoQpair>,
     poll_group: PollGroup,
     poller: poller::Poller<'a>,
-    pub qpair: Option<IoQpair>,
     io_stats_controller: IoStatsController,
     pub device: Box<dyn BlockDevice>,
     num_pending_ios: u64,
@@ -224,7 +226,7 @@ impl NvmeIoChannelInner<'_> {
         if self.qpair.is_some() {
             // Remove qpair and trigger its deallocation via drop().
             let qpair = self.qpair.take().unwrap();
-            debug!(
+            info!(
                 "dropping qpair {:p} ({} I/O requests pending)",
                 qpair.as_ptr(),
                 self.num_pending_ios
@@ -388,10 +390,16 @@ impl IoStatsController {
 pub struct NvmeControllerIoChannel(NonNull<spdk_io_channel>);
 
 extern "C" fn disconnected_qpair_cb(
-    qpair: *mut spdk_nvme_qpair,
+    _qpair: *mut spdk_nvme_qpair,
     ctx: *mut c_void,
 ) {
     let inner = NvmeIoChannel::from_raw(ctx).inner_mut();
+
+    if let Some(ref qpair) = inner.qpair {
+        unsafe {
+            nvme_qpair_abort_reqs(qpair.as_ptr(), 1);
+        }
+    }
 
     //warn!(?qpair, "NVMe qpair disconnected");
     // shutdown the channel such that pending IO if any, gets aborted.

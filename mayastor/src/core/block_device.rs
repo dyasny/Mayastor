@@ -186,6 +186,9 @@ pub trait BlockDeviceHandle {
         })
     }
 
+    /// Cancel all outstanding I/O operations associated with this handle.
+    fn close(&self) -> Result<(), CoreError>;
+
     async fn io_passthru(
         &self,
         nvme_cmd: &spdk_sys::spdk_nvme_cmd,

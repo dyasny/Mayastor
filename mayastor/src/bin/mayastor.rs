@@ -2,7 +2,7 @@
 extern crate tracing;
 use futures::future::FutureExt;
 use mayastor::{
-    bdev::{device_destroy, nexus_lookup, util::uring},
+    bdev::{nexus_lookup, util::uring},
     core::{
         runtime,
         Command,
@@ -26,6 +26,7 @@ use mayastor::{
 };
 
 // manual call to a gRCP method.
+#[allow(dead_code)]
 async fn reaper() {
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -39,23 +40,20 @@ async fn reaper() {
                     info!("got a dead child {}", child);
                     let rx = Mthread::get_init().spawn_local(async move {
                         if let Some(nexus) = nexus_lookup(&nexus) {
-                            match nexus.child_lookup(&child) {
-                                Some(child) => {
-                                    if let Err(err) = child.destroy().await {
-                                        error!(
-                                            "{}: destroying child {} failed {}",
-                                            nexus, child, err
-                                        );
-                                    }
+                            if let Some(child) = nexus.child_lookup(&child) {
+                                if let Err(err) = child.destroy().await {
+                                    error!(
+                                        "{}: destroying child {} failed {}",
+                                        nexus, child, err
+                                    );
                                 }
-                                None => {}
                             }
 
                             nexus.clear_failfast().await.unwrap();
                             nexus.resume().await.unwrap();
                         }
                     });
-                    dbg!(rx.unwrap().await);
+                    dbg!(rx.unwrap().await.unwrap());
                 }
             }
         }
