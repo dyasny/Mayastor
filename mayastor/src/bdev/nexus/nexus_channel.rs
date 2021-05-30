@@ -106,7 +106,7 @@ impl NexusChannelInner {
     }
 
     /// Remove a child from the readers and/or writers
-    pub fn remove_child_in_submit(&mut self, name: &str) -> bool {
+    pub fn remove_child(&mut self, name: &str) {
         self.previous = 0;
         let nexus = unsafe { Nexus::from_raw(self.device) };
         trace!(
@@ -133,7 +133,6 @@ impl NexusChannelInner {
             self.readers.len(),
             nexus.children.len()
         );
-        self.fault_child(name)
     }
 
     /// Fault the child by marking its status.

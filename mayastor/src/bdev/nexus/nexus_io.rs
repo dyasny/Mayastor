@@ -216,9 +216,9 @@ impl NexusBio {
     fn ok_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             if self.ctx().must_fail {
-                    warn!(?self, "resubmitted due to must_fail");
-                    //self.retry_checked();
-                    self.fail();
+                warn!(?self, "resubmitted due to must_fail");
+                //self.retry_checked();
+                self.fail();
             } else {
                 self.ok();
             }
@@ -309,7 +309,7 @@ impl NexusBio {
                 trace!(
                     "(core: {} thread: {}): read IO to {} submission failed with error {:?}",
                     Cores::current(), Mthread::current().unwrap().name(), device, r);
-                let must_retire = inner.remove_child_in_submit(&device);
+                let must_retire = inner.fault_child(&device);
                 if must_retire {
                     self.do_retire(device);
                 }
@@ -321,8 +321,8 @@ impl NexusBio {
             r
         } else {
             trace!(
-                    "(core: {} thread: {}): read IO submission failed no children available",
-                    Cores::current(), Mthread::current().unwrap().name());
+                "(core: {} thread: {}): read IO submission failed no children available",
+                Cores::current(), Mthread::current().unwrap().name());
             self.fail();
             Err(CoreError::NoDevicesAvailable {})
         }
@@ -431,19 +431,19 @@ impl NexusBio {
                 // we should never reach here, if we do it is a bug.
                 _ => unreachable!(),
             }
-            .map(|_| {
-                inflight += 1;
-            })
-            .map_err(|se| {
-                error!(
-                    "(core: {} thread: {}): IO submission failed with error {:?}, I/Os submitted: {}",
-                    Cores::current(), Mthread::current().unwrap().name(), se, inflight
-                );
+                .map(|_| {
+                    inflight += 1;
+                })
+                .map_err(|se| {
+                    error!(
+                        "(core: {} thread: {}): IO submission failed with error {:?}, I/Os submitted: {}",
+                        Cores::current(), Mthread::current().unwrap().name(), se, inflight
+                    );
 
-                // Record the name of the device for immediate retire.
-                failed_device = Some(h.get_device().device_name());
-                se
-            })
+                    // Record the name of the device for immediate retire.
+                    failed_device = Some(h.get_device().device_name());
+                    se
+                })
         });
 
         // Submission errors can also trigger device retire.
@@ -460,7 +460,7 @@ impl NexusBio {
             // set the IO as failed in the submission stage.
             self.ctx_as_mut().must_fail = true;
             let must_retire =
-                self.inner_channel().remove_child_in_submit(&device);
+                self.inner_channel().fault_child(&device);
             if must_retire {
                 self.do_retire(device);
             }
@@ -512,7 +512,7 @@ impl NexusBio {
         // outstanding IO to complete, the IO's to that child must be aborted.
         // The abortion is implicit when removing the device.
 
-        error!(?status);
+       // error!(?status);
 
         if matches!(
             status,
@@ -550,17 +550,16 @@ impl NexusBio {
             self.do_retire(child);
         }
 
-        if retry {
-            return self.ok_checked();
-        }
+        // if retry {
+        //     return self.ok_checked();
+        // }
 
         self.fail_checked();
     }
 
     /// Retire a child for this nexus.
     async fn child_retire(nexus: String, device: String) {
-        match nexus_lookup(&nexus) {
-            Some(nexus) => {
+        if let Some(nexus)  = nexus_lookup(&nexus) {
                 warn!(
                     "nexus: {} core: {}, thread {:?}, faulting child {}",
                     nexus,
@@ -569,90 +568,11 @@ impl NexusBio {
                     device,
                 );
 
-                // Pausing a nexus acts like entering a critical
-                // section allowing only one retire request to run at a
-                // time, which prevents  inconsistency in reading/updating nexus
-                // configuration.
-                // Lookup child once more and finally remove it.
-                match nexus.child_lookup(&device) {
-                    Some(child) => {
-                        // Pausing a nexus acts like entering a critical
-                        // section,
-                        // allowing only one retire request to run at a
-                        // time, which prevents
-                        // inconsistency in reading/updating nexus
-                        // configuration.
-                        PAUSING.fetch_add(1, Ordering::SeqCst);
-                        tracing::info!("Before Reconfigure");
-                        nexus.child_retire(device.clone()).await.unwrap();
-                        tracing::info!("Before Pause");
-                        nexus.pause().await.unwrap();
-                        tracing::info!("After Pause");
-                        PAUSED.fetch_add(1, Ordering::SeqCst);
-                        PAUSING.fetch_min(1, Ordering::SeqCst);
-
-                        // Lookup child once more and finally remove it.
-                        match nexus.child_lookup(&device) {
-                            Some(child) => {
-                                nexus
-                                    .persist(PersistOp::Update((
-                                        child.name.clone(),
-                                        child.state(),
-                                    )))
-                                    .await;
-                                // TODO: an error can occur here if a
-                                // separate task,
-                                // e.g. grpc request is also deleting the
-                                // child.
-                                if let Err(err) = child.destroy().await {
-                                    error!(
-                                        "{}: destroying child {} failed {}",
-                                        nexus, child, err
-                                    );
-                                }
-                            }
-                            None => {
-                                warn!(
-                                        "{} no longer belongs to nexus {}, skipping child removal",
-                                        device, nexus
-                                    );
-                            }
-                        }
-
-                        nexus.resume().await.unwrap();
-                        PAUSED.fetch_min(1, Ordering::SeqCst);
-
-                        if nexus.status() == NexusStatus::Faulted {
-                            error!(":{} has no children left... ", nexus);
-                        }
-                    }
-                    None => debug!("child not found"),
-                }
+            dbg!(nexus.child_retire(device).await);
+            if matches!(nexus.status(), NexusStatus::Faulted) {
+                error!(?nexus, "no children left");
             }
 
-            None => {
-                debug!("Nexus: {} found", nexus);
             }
         }
-    }
-
-    async fn child_retire2(nexus: String, device: String) {
-        if let Some(n) = nexus_lookup(&nexus) {
-            warn!(
-                "nexus: {} core: {}, thread {:?}, faulting child {}",
-                nexus,
-                Cores::current(),
-                Mthread::current(),
-                device,
-            );
-
-            n.pause().await.unwrap();
-
-            if let Some(child) = n.child_lookup(&device) {
-                info!("enqueue retire for {} of child {}", nexus, device);
-                DEAD_LIST
-                    .push(Command::Retire(nexus.clone(), child.name.clone()));
-            }
-        }
-    }
 }

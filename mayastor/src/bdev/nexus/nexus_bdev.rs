@@ -16,6 +16,7 @@ use nix::errno::Errno;
 use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
+use futures::FutureExt;
 
 use crate::core::IoDevice;
 
@@ -46,6 +47,8 @@ use crate::{
     subsys::{NvmfError, NvmfSubsystem},
 };
 use crossbeam::atomic::AtomicCell;
+use crate::bdev::nexus::nexus_child::ChildState::Faulted;
+use crate::bdev::Reason;
 
 /// Obtain the full error chain
 pub trait VerboseError {
@@ -245,6 +248,8 @@ pub enum Error {
     FailedCreateSnapshot { name: String, source: CoreError },
     #[snafu(display("NVMf subsystem error: {}", e))]
     SubsysNvmfError { e: String },
+    #[snafu(display("failed to pause {} current state {:?}", name, state))]
+    PauseError { state: NexusPauseState, name: String}
 }
 
 impl From<NvmfError> for Error {
@@ -308,7 +313,7 @@ pub enum NexusTarget {
     NexusNvmfTarget,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum NexusPauseState {
+pub enum NexusPauseState {
     Unpaused,
     Pausing,
     Paused,
@@ -369,6 +374,8 @@ pub enum NexusState {
     Closed,
     /// open
     Open,
+    /// reconfiguring internal IO channels
+    Reconfiguring,
 }
 
 impl ToString for NexusState {
@@ -377,6 +384,7 @@ impl ToString for NexusState {
             NexusState::Init => "init",
             NexusState::Closed => "closed",
             NexusState::Open => "open",
+            NexusState::Reconfiguring => "reconfiguring",
         }
         .parse()
         .unwrap()
@@ -417,7 +425,8 @@ fn update_failfast_cb(
     channel: &mut NexusChannelInner,
     ctx: &mut UpdateFailFastCtx,
 ) -> i32 {
-    channel.remove_child_in_submit(ctx.child.as_ref().unwrap());
+
+    ctx.child.as_ref().map(|child | { channel.remove_child(child)});
     0
 }
 
@@ -734,7 +743,7 @@ impl Nexus {
     /// with the nexus paused once they are awakened via resume().
     /// Note: in order to handle concurrent pauses properly, this function must
     /// be called only from the master core.
-    pub async fn pause(&mut self) -> Result<(), NexusPauseState> {
+    pub async fn pause(&self) -> Result<(), Error> {
         assert_eq!(Cores::current(), Cores::first());
 
         let state = self
@@ -742,7 +751,7 @@ impl Nexus {
             .compare_exchange(
                 NexusPauseState::Unpaused,
                 NexusPauseState::Pausing,
-            )?;
+            ).map_err(|e| Error::PauseError { state: e, name: self.name.clone() })?;
 
         match state {
             // Pause nexus if it is in the unpaused state.
@@ -780,7 +789,6 @@ impl Nexus {
                 );
 
                 let (s, r) = oneshot::channel::<i32>();
-                self.pause_waiters.push(s);
 
                 r.await.expect("Nexus pause sender disappeared");
                 info!("{} pause is granted", self.name,);
@@ -820,9 +828,40 @@ impl Nexus {
         Ok(())
     }
 
-    pub async fn child_retire(&self, name: String) -> Result<(), Error> {
-        self.update_failfast( false, Some(name)).await
+    async fn child_retire_for_each_channel(&self, child: Option<String>) -> Result<(), Error> {
+        let (sender, r) = oneshot::channel::<bool>();
 
+        let ctx = UpdateFailFastCtx {
+            sender,
+            increment: false,
+            nexus: self.name.clone(),
+            child,
+        };
+
+        if let Some(io_device) = self.io_device.as_ref() {
+        io_device.traverse_io_channels(
+            update_failfast_cb,
+            update_failfast_done,
+            NexusChannel::inner_from_channel,
+            ctx,
+            );
+
+            info!(?self, "all channels retired");
+            r.await.map_err(|e| error!("update failfast sender already dropped"));
+        }
+
+        Ok(())
+    }
+
+    pub async fn child_retire(&mut self, name: String) -> Result<(), Error> {
+        if let Some(child) = self.child_lookup(&name) {
+            self.child_retire_for_each_channel(Some(name.clone())).await?;
+            self.pause().await?;
+            self.persist(PersistOp::Update((name, child.state()))).await;
+            self.resume().await
+        } else {
+            Ok(())
+        }
     }
 
     #[allow(dead_code)]
@@ -957,7 +996,7 @@ impl Nexus {
         match *self.state.lock() {
             NexusState::Init => NexusStatus::Degraded,
             NexusState::Closed => NexusStatus::Faulted,
-            NexusState::Open => {
+            NexusState::Open | NexusState::Reconfiguring =>  {
                 if self
                     .children
                     .iter()

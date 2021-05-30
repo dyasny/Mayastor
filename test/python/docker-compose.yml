@@ -76,7 +76,7 @@ services:
     environment:
         - MY_POD_IP=10.0.0.5
         - RUST_BACKTRACE=full
-        - RUST_LOG=mayastor=trace
+        - RUST_LOG=mayastor=DEBUG
         - NEXUS_DONT_READ_LABELS=true
     command: ${SRCDIR}/target/debug/mayastor -g 0.0.0.0 -l 11,12,13,14,15 -r /tmp/ms3.sock
     networks:
