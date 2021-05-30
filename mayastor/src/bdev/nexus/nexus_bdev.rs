@@ -17,7 +17,7 @@ use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
 
-use crate::core::{IoDevice, Reactors};
+use crate::core::IoDevice;
 
 use rpc::mayastor::NvmeAnaState;
 use spdk_sys::{spdk_bdev, spdk_bdev_register, spdk_bdev_unregister};
@@ -45,16 +45,7 @@ use crate::{
         },
         Reason,
     },
-    core::{
-        Bdev,
-        CoreError,
-        CoreError::ReactorError,
-        Cores,
-        IoType,
-        Protocol,
-        Reactor,
-        Share,
-    },
+    core::{Bdev, CoreError, Cores, IoType, Protocol, Reactor, Share},
     ffihelper::errno_result_from_i32,
     nexus_uri::{bdev_destroy, NexusBdevError},
     rebuild::RebuildError,
@@ -887,7 +878,6 @@ impl Nexus {
         error!("After Pause");
         if let Some(child) = self.child_lookup(&name) {
             self.persist(PersistOp::Update((name, child.state()))).await;
-            child.destroy().await;
         }
         self.resume().await
     }

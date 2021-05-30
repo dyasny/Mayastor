@@ -180,6 +180,7 @@ impl IoQpair {
                 self.qpair.as_ptr(),
             )
         };
+        self.state();
         rc
     }
 

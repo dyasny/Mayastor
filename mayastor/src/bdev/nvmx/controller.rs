@@ -363,6 +363,7 @@ impl<'a> NvmeController<'a> {
         channel: &mut NvmeIoChannelInner,
         ctx: &mut ShutdownCtx,
     ) -> i32 {
+        return 0;
         let rc = channel.shutdown();
 
         if rc == 0 {
@@ -403,11 +404,11 @@ impl<'a> NvmeController<'a> {
         // unsafe {
         //     (*controller.ctrlr_as_ptr()).reinit_after_reset = false;
         // }
-        unsafe { spdk_nvme_ctrlr_fail(controller.ctrlr_as_ptr()) };
-        let rc = unsafe { spdk_nvme_ctrlr_reset(controller.ctrlr_as_ptr()) };
-        if rc != 0 {
-            error!("{} failed to reset controller, rc = {}", ctx.name, rc);
-        }
+        // let rc = unsafe { spdk_nvme_ctrlr_reset(controller.ctrlr_as_ptr()) };
+        // if rc != 0 {
+        //     error!("{} failed to reset controller, rc = {}", ctx.name, rc);
+        // }
+        // unsafe { spdk_nvme_ctrlr_fail(controller.ctrlr_as_ptr()) };
 
         // Finalize controller shutdown and invoke callback.
         controller.clear_namespaces();
